@@ -1,0 +1,33 @@
+name: Cancel stale Edit Aja builds
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cancel-stale-builds.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel older queued and running Windows builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs_json="$(gh api "repos/$REPO/actions/workflows/build-windows.yml/runs?branch=main&per_page=100")"
+          keep_id="$(printf '%s' "$runs_json" | jq -r '[.workflow_runs[] | select(.status=="queued" or .status=="in_progress")] | sort_by(.created_at) | last | .id // empty')"
+          echo "Keeping newest active Windows build: ${keep_id:-none}"
+          printf '%s' "$runs_json" |
+            jq -r --arg keep "$keep_id" '.workflow_runs[] | select((.status=="queued" or .status=="in_progress") and ((.id|tostring) != $keep)) | .id' |
+            while read -r run_id; do
+              [ -z "$run_id" ] && continue
+              echo "Cancelling stale build $run_id"
+              gh api --method POST "repos/$REPO/actions/runs/$run_id/cancel" || true
+            done
