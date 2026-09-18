@@ -69,6 +69,439 @@ jobs:
         run: |
           # Kdenlive's current Windows Craft builds support Visual Studio 2022.
           # GitHub's windows-2022 runner already contains the MSVC toolchain.
+          # Craft warns when Git's sh or MinGW GCC leak into an MSVC build.
+          # Remove those conflicting directories only for the bootstrap process.
+          $pathParts = $env:PATH -split ';' | Where-Object {
+            $_ -and
+            $_ -notmatch '(?i)\\mingw64\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
+          $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
+          Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
+          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
+
+          $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
+          if (-not (Test-Path $cfg)) { throw "Craft settings not found: $cfg" }
+
+          $text = Get-Content $cfg -Raw
+          # Be explicit so dependency packages match KDE's MSVC cache.
+          $text = [regex]::Replace($text, '(?m)^ABI\s*=.*$', 'ABI = windows-cl-msvc2022-x86_64')
+          $text = [regex]::Replace($text, '(?m)^BuildType\s*=.*$', 'BuildType = RelWithDebInfo')
+          $text = [regex]::Replace($text, '(?m)^MakeProgram\s*=.*$', 'MakeProgram = jom')
+          Set-Content -Path $cfg -Value $text -Encoding UTF8
+
+          Get-Content $cfg | Select-String 'ABI|BuildType|MakeProgram|CacheVersion|RepositoryUrl'
+
+      - name: Verify KDE MSVC binary cache
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
+          $text = Get-Content $cfg -Raw
+          $match = [regex]::Match($text, '(?m)^CacheVersion\s*=\s*(.+?)\s*$')
+          if (-not $match.Success) { throw 'Craft CacheVersion is missing' }
+          $cacheVersion = $match.Groups[1].Value.Trim()
+
+          $cacheUrl = "https://files.kde.org/craft/Qt6/$cacheVersion/windows/cl/msvc2022/x86_64/$env:CRAFT_BUILD_TYPE/manifest.json"
+          Write-Host "Checking KDE Craft binary cache: $cacheUrl"
+          $manifest = Join-Path $env:TEMP 'editaja-craft-manifest.json'
+          & curl.exe -L --fail --retry 5 --retry-delay 2 -o $manifest $cacheUrl
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $manifest)) {
+            throw "KDE MSVC binary cache is unavailable: $cacheUrl"
+          }
+          Write-Host "KDE MSVC binary cache is available."
+
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Directory.Name -eq 'kdenlive' -and
+              $_.Directory.Parent -and
+              $_.Directory.Parent.Name -eq 'kdemultimedia'
+            } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Install dependencies from KDE binary cache
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --install-deps kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Edit Aja only
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+
+          # Dependencies were installed above from KDE's binary cache.
+          # --no-cache here intentionally builds our modified Edit Aja source.
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --no-cache kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Windows packager
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --update nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package Edit Aja for Windows
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --package kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect Windows package
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $binaryCount = 0
+
+          if (Test-Path "$env:CRAFT_ROOT\craft\bin\craft.py") {
+            . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+            $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+            $packageDirOutput = & python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE -q --get "packageDestinationDir()" virtual/base 2>$null
+            $packageDir = ($packageDirOutput | Select-Object -Last 1).Trim()
+
+            if ($packageDir -and (Test-Path $packageDir)) {
+              Write-Host "Craft package directory: $packageDir"
+              $packages = Get-ChildItem $packageDir -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Extension -in '.exe','.zip','.7z','.sha256' -and
+                  ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+                }
+              foreach ($p in $packages) {
+                Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+                if ($p.Extension -in '.exe','.zip','.7z') { $binaryCount++ }
+              }
+            }
+          }
+
+          # Fallback search in case Craft changes its package destination layout.
+          if ($binaryCount -eq 0 -and (Test-Path $env:CRAFT_ROOT)) {
+            $packages = Get-ChildItem $env:CRAFT_ROOT -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.exe','.zip','.7z' -and
+                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+              } |
+              Select-Object -First 10
+            foreach ($p in $packages) {
+              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+              $binaryCount++
+            }
+          }
+
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+          if ($binaryCount -eq 0) {
+            throw 'No runnable Edit Aja Windows package was produced.'
+          }
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+ -and
+            $_ -notmatch '(?i)\\Git\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
+          $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
+          Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
+          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
+
+          $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
+          if (-not (Test-Path $cfg)) { throw "Craft settings not found: $cfg" }
+
+          $text = Get-Content $cfg -Raw
+          # Be explicit so dependency packages match KDE's MSVC cache.
+          $text = [regex]::Replace($text, '(?m)^ABI\s*=.*$', 'ABI = windows-cl-msvc2022-x86_64')
+          $text = [regex]::Replace($text, '(?m)^BuildType\s*=.*$', 'BuildType = RelWithDebInfo')
+          $text = [regex]::Replace($text, '(?m)^MakeProgram\s*=.*$', 'MakeProgram = jom')
+          Set-Content -Path $cfg -Value $text -Encoding UTF8
+
+          Get-Content $cfg | Select-String 'ABI|BuildType|MakeProgram|CacheVersion|RepositoryUrl'
+
+      - name: Verify KDE MSVC binary cache
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
+          $text = Get-Content $cfg -Raw
+          $match = [regex]::Match($text, '(?m)^CacheVersion\s*=\s*(.+?)\s*$')
+          if (-not $match.Success) { throw 'Craft CacheVersion is missing' }
+          $cacheVersion = $match.Groups[1].Value.Trim()
+
+          $cacheUrl = "https://files.kde.org/craft/Qt6/$cacheVersion/windows/cl/msvc2022/x86_64/$env:CRAFT_BUILD_TYPE/manifest.json"
+          Write-Host "Checking KDE Craft binary cache: $cacheUrl"
+          $manifest = Join-Path $env:TEMP 'editaja-craft-manifest.json'
+          & curl.exe -L --fail --retry 5 --retry-delay 2 -o $manifest $cacheUrl
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $manifest)) {
+            throw "KDE MSVC binary cache is unavailable: $cacheUrl"
+          }
+          Write-Host "KDE MSVC binary cache is available."
+
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Directory.Name -eq 'kdenlive' -and
+              $_.Directory.Parent -and
+              $_.Directory.Parent.Name -eq 'kdemultimedia'
+            } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Install dependencies from KDE binary cache
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --install-deps kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Edit Aja only
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+
+          # Dependencies were installed above from KDE's binary cache.
+          # --no-cache here intentionally builds our modified Edit Aja source.
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --no-cache kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Windows packager
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --update nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package Edit Aja for Windows
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --package kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect Windows package
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $binaryCount = 0
+
+          if (Test-Path "$env:CRAFT_ROOT\craft\bin\craft.py") {
+            . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+            $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+            $packageDirOutput = & python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE -q --get "packageDestinationDir()" virtual/base 2>$null
+            $packageDir = ($packageDirOutput | Select-Object -Last 1).Trim()
+
+            if ($packageDir -and (Test-Path $packageDir)) {
+              Write-Host "Craft package directory: $packageDir"
+              $packages = Get-ChildItem $packageDir -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Extension -in '.exe','.zip','.7z','.sha256' -and
+                  ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+                }
+              foreach ($p in $packages) {
+                Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+                if ($p.Extension -in '.exe','.zip','.7z') { $binaryCount++ }
+              }
+            }
+          }
+
+          # Fallback search in case Craft changes its package destination layout.
+          if ($binaryCount -eq 0 -and (Test-Path $env:CRAFT_ROOT)) {
+            $packages = Get-ChildItem $env:CRAFT_ROOT -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.exe','.zip','.7z' -and
+                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+              } |
+              Select-Object -First 10
+            foreach ($p in $packages) {
+              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+              $binaryCount++
+            }
+          }
+
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+          if ($binaryCount -eq 0) {
+            throw 'No runnable Edit Aja Windows package was produced.'
+          }
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+ -and
+            $_ -notmatch '(?i)\\Git\\usr\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
+          $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
+          Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
+          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
+
+          $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
+          if (-not (Test-Path $cfg)) { throw "Craft settings not found: $cfg" }
+
+          $text = Get-Content $cfg -Raw
+          # Be explicit so dependency packages match KDE's MSVC cache.
+          $text = [regex]::Replace($text, '(?m)^ABI\s*=.*$', 'ABI = windows-cl-msvc2022-x86_64')
+          $text = [regex]::Replace($text, '(?m)^BuildType\s*=.*$', 'BuildType = RelWithDebInfo')
+          $text = [regex]::Replace($text, '(?m)^MakeProgram\s*=.*$', 'MakeProgram = jom')
+          Set-Content -Path $cfg -Value $text -Encoding UTF8
+
+          Get-Content $cfg | Select-String 'ABI|BuildType|MakeProgram|CacheVersion|RepositoryUrl'
+
+      - name: Verify KDE MSVC binary cache
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
+          $text = Get-Content $cfg -Raw
+          $match = [regex]::Match($text, '(?m)^CacheVersion\s*=\s*(.+?)\s*$')
+          if (-not $match.Success) { throw 'Craft CacheVersion is missing' }
+          $cacheVersion = $match.Groups[1].Value.Trim()
+
+          $cacheUrl = "https://files.kde.org/craft/Qt6/$cacheVersion/windows/cl/msvc2022/x86_64/$env:CRAFT_BUILD_TYPE/manifest.json"
+          Write-Host "Checking KDE Craft binary cache: $cacheUrl"
+          $manifest = Join-Path $env:TEMP 'editaja-craft-manifest.json'
+          & curl.exe -L --fail --retry 5 --retry-delay 2 -o $manifest $cacheUrl
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $manifest)) {
+            throw "KDE MSVC binary cache is unavailable: $cacheUrl"
+          }
+          Write-Host "KDE MSVC binary cache is available."
+
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Directory.Name -eq 'kdenlive' -and
+              $_.Directory.Parent -and
+              $_.Directory.Parent.Name -eq 'kdemultimedia'
+            } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Install dependencies from KDE binary cache
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --install-deps kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Edit Aja only
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+
+          # Dependencies were installed above from KDE's binary cache.
+          # --no-cache here intentionally builds our modified Edit Aja source.
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --no-cache kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Windows packager
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --update nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package Edit Aja for Windows
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+          python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --package kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect Windows package
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $binaryCount = 0
+
+          if (Test-Path "$env:CRAFT_ROOT\craft\bin\craft.py") {
+            . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+            $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
+            $packageDirOutput = & python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE -q --get "packageDestinationDir()" virtual/base 2>$null
+            $packageDir = ($packageDirOutput | Select-Object -Last 1).Trim()
+
+            if ($packageDir -and (Test-Path $packageDir)) {
+              Write-Host "Craft package directory: $packageDir"
+              $packages = Get-ChildItem $packageDir -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Extension -in '.exe','.zip','.7z','.sha256' -and
+                  ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+                }
+              foreach ($p in $packages) {
+                Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+                if ($p.Extension -in '.exe','.zip','.7z') { $binaryCount++ }
+              }
+            }
+          }
+
+          # Fallback search in case Craft changes its package destination layout.
+          if ($binaryCount -eq 0 -and (Test-Path $env:CRAFT_ROOT)) {
+            $packages = Get-ChildItem $env:CRAFT_ROOT -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.exe','.zip','.7z' -and
+                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+              } |
+              Select-Object -First 10
+            foreach ($p in $packages) {
+              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+              $binaryCount++
+            }
+          }
+
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+          if ($binaryCount -eq 0) {
+            throw 'No runnable Edit Aja Windows package was produced.'
+          }
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+          }
+          $env:PATH = ($pathParts -join ';')
+          Write-Host 'Sanitized PATH for KDE Craft MSVC bootstrap.'
           New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
           $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
           Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
