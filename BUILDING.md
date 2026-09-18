@@ -13,3 +13,5 @@ Build chain:
 The fork deliberately keeps several Kdenlive internal names and file extensions
 for compatibility with existing projects, effects, translations, QML modules,
 and the Phase 5 MCP/API namespace.
+
+<!-- CI trigger: verify Windows build after KDE Craft PATH sanitization. -->
