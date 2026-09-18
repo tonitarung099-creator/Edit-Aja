@@ -68,10 +68,10 @@ jobs:
         run: |
           $env:PATH = (($env:PATH -split ';') | Where-Object {
             $_ -and
-            $_ -notlike '*\Git\bin' -and
-            $_ -notlike '*\Git\usr\bin' -and
-            $_ -notlike 'C:\mingw64\bin' -and
-            $_ -notlike 'C:\Strawberry\c\bin'
+            $_ -notmatch '(?i)\\Git\\bin$' -and
+            $_ -notmatch '(?i)\\Git\\usr\\bin$' -and
+            $_ -notmatch '(?i)\\mingw64\\bin$' -and
+            $_ -notmatch '(?i)\\Strawberry\\c\\bin$'
           }) -join ';'
 
           New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
@@ -117,30 +117,25 @@ jobs:
           Write-Host "Edit Aja blueprint: $target"
           Get-ChildItem $target
 
-      - name: Build Edit Aja and dependencies
+      - name: Build and package Edit Aja
         shell: pwsh
         run: |
           $env:PATH = (($env:PATH -split ';') | Where-Object {
             $_ -and
-            $_ -notlike '*\Git\bin' -and
-            $_ -notlike '*\Git\usr\bin' -and
-            $_ -notlike 'C:\mingw64\bin' -and
-            $_ -notlike 'C:\Strawberry\c\bin'
+            $_ -notmatch '(?i)\\Git\\bin$' -and
+            $_ -notmatch '(?i)\\Git\\usr\\bin$' -and
+            $_ -notmatch '(?i)\\mingw64\\bin$' -and
+            $_ -notmatch '(?i)\\Strawberry\\c\\bin$'
           }) -join ';'
+
+          # The default Craft action is "all": fetch, patch, configure, build
+          # and install the dependency graph plus Edit Aja.
           python "$env:CRAFT_ROOT\craft\bin\craft.py" --ci-mode kde/kdemultimedia/editaja
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Package Edit Aja
-        shell: pwsh
-        run: |
-          $env:PATH = (($env:PATH -split ';') | Where-Object {
-            $_ -and
-            $_ -notlike '*\Git\bin' -and
-            $_ -notlike '*\Git\usr\bin' -and
-            $_ -notlike 'C:\mingw64\bin' -and
-            $_ -notlike 'C:\Strawberry\c\bin'
-          }) -join ';'
+          # Packaging is a separate action that consumes the already-built image.
           python "$env:CRAFT_ROOT\craft\bin\craft.py" --ci-mode --package kde/kdemultimedia/editaja
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Collect Windows package
         if: always()
