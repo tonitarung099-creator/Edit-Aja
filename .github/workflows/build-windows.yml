@@ -128,7 +128,10 @@ jobs:
       - name: Install dependencies from KDE binary cache
         shell: pwsh
         run: |
-          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $setup = ConvertFrom-Json (& python "$env:CRAFT_ROOT\craft\bin\CraftSetupHelper.py" --setup --format=json)
+          foreach ($property in $setup.PSObject.Properties) {
+            Set-Item -Force -Path "Env:$($property.Name)" -Value "$($property.Value)"
+          }
           $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
           python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --install-deps kde/kdemultimedia/editaja
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -136,7 +139,10 @@ jobs:
       - name: Build Edit Aja only
         shell: pwsh
         run: |
-          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $setup = ConvertFrom-Json (& python "$env:CRAFT_ROOT\craft\bin\CraftSetupHelper.py" --setup --format=json)
+          foreach ($property in $setup.PSObject.Properties) {
+            Set-Item -Force -Path "Env:$($property.Name)" -Value "$($property.Value)"
+          }
           $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
 
           # Dependencies were installed above from KDE's binary cache.
@@ -147,7 +153,10 @@ jobs:
       - name: Install Windows packager
         shell: pwsh
         run: |
-          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $setup = ConvertFrom-Json (& python "$env:CRAFT_ROOT\craft\bin\CraftSetupHelper.py" --setup --format=json)
+          foreach ($property in $setup.PSObject.Properties) {
+            Set-Item -Force -Path "Env:$($property.Name)" -Value "$($property.Value)"
+          }
           $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
           python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --use-cache --update nsis
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -155,7 +164,10 @@ jobs:
       - name: Package Edit Aja for Windows
         shell: pwsh
         run: |
-          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          $setup = ConvertFrom-Json (& python "$env:CRAFT_ROOT\craft\bin\CraftSetupHelper.py" --setup --format=json)
+          foreach ($property in $setup.PSObject.Properties) {
+            Set-Item -Force -Path "Env:$($property.Name)" -Value "$($property.Value)"
+          }
           $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
           python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE --package kde/kdemultimedia/editaja
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -168,7 +180,10 @@ jobs:
           $binaryCount = 0
 
           if (Test-Path "$env:CRAFT_ROOT\craft\bin\craft.py") {
-            . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+            $setup = ConvertFrom-Json (& python "$env:CRAFT_ROOT\craft\bin\CraftSetupHelper.py" --setup --format=json)
+          foreach ($property in $setup.PSObject.Properties) {
+            Set-Item -Force -Path "Env:$($property.Name)" -Value "$($property.Value)"
+          }
             $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
             $packageDirOutput = & python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE -q --get "packageDestinationDir()" virtual/base 2>$null
             $packageDir = ($packageDirOutput | Select-Object -Last 1).Trim()
