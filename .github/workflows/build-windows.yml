@@ -16,6 +16,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: edit-aja-windows
+  cancel-in-progress: true
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -32,7 +36,7 @@ jobs:
       - name: Reassemble and verify Phase 5 patch
         shell: pwsh
         run: |
-          python -c "import base64,bz2,hashlib,pathlib; p=pathlib.Path('patches'); s=''.join(x.read_text() for x in sorted(p.glob('phase5.patch.bz2.b64.*'))); out=bz2.decompress(base64.b64decode(s)); h=hashlib.sha256(out).hexdigest(); print('Phase 5 SHA-256:',h); assert h=='$env:PHASE5_SHA256'; pathlib.Path('craft/editaja/phase5.patch').write_bytes(out)"
+          python -c "import base64,bz2,hashlib,pathlib; p=pathlib.Path('patches'); n=['00','01','02','03','04.00','04.01','04.02','05.00','05.01','05.02']; s=''.join((p/f'phase5.patch.bz2.b64.{x}').read_text() for x in n); out=bz2.decompress(base64.b64decode(s)); h=hashlib.sha256(out).hexdigest(); print('Phase 5 SHA-256:',h); assert h=='$env:PHASE5_SHA256'; pathlib.Path('craft/editaja/phase5.patch').write_bytes(out)"
           Copy-Item branding/editaja-logo.png.b64 craft/editaja/editaja-logo.png.b64 -Force
           Copy-Item scripts/apply_branding.py craft/editaja/apply_branding.py -Force
 
