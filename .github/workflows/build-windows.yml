@@ -1,0 +1,109 @@
+name: Build Edit Aja for Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-windows.yml'
+      - 'patches/**'
+      - 'branding/**'
+      - 'scripts/**'
+      - 'craft/**'
+      - 'README.md'
+      - 'BUILDING.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    env:
+      UPSTREAM_COMMIT: c3d8a38c04470f6726b21485fc488f2cd2921654
+      CRAFT_ROOT: C:\CraftRoot
+
+    steps:
+      - name: Checkout Edit Aja build repository
+        uses: actions/checkout@v4
+
+      - name: Decode Phase 5 patch and stage branding asset
+        shell: pwsh
+        run: |
+          python -c "import base64,gzip,pathlib; p=pathlib.Path('patches/phase5.patch.gz.b64'); pathlib.Path('craft/editaja/phase5.patch').write_bytes(gzip.decompress(base64.b64decode(p.read_text())))"
+          Copy-Item branding/editaja-logo.png.b64 craft/editaja/editaja-logo.png.b64 -Force
+          Copy-Item scripts/apply_branding.py craft/editaja/apply_branding.py -Force
+
+      - name: Reconstruct exact corresponding source
+        shell: pwsh
+        run: |
+          git clone https://github.com/KDE/kdenlive.git corresponding-source
+          git -C corresponding-source checkout $env:UPSTREAM_COMMIT
+          git -C corresponding-source apply --ignore-space-change -p2 "$env:GITHUB_WORKSPACE\craft\editaja\phase5.patch"
+          python scripts/apply_branding.py corresponding-source --assets branding
+          if (-not (Select-String -Path corresponding-source/src/main.cpp -Pattern 'i18n\("Edit Aja"\)' -Quiet)) {
+            throw 'Edit Aja branding verification failed'
+          }
+          Remove-Item -Recurse -Force corresponding-source/.git
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Compress-Archive -Path corresponding-source/* -DestinationPath artifacts/Edit-Aja-Source.zip -CompressionLevel Optimal
+
+      - name: Install KDE Craft
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/install_craft.ps1 -OutFile install_craft.ps1
+          & .\install_craft.ps1 -root $env:CRAFT_ROOT -use-defaults
+
+      - name: Configure Craft for MinGW x64
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
+          $text = Get-Content $cfg -Raw
+          $text = [regex]::Replace($text, '(?m)^ABI\s*=.*$', 'ABI = windows-gcc-x86_64')
+          $text = [regex]::Replace($text, '(?m)^MakeProgram\s*=.*$', 'MakeProgram = mingw32-make')
+          Set-Content -Path $cfg -Value $text -Encoding UTF8
+          Get-Content $cfg | Select-String 'ABI|MakeProgram'
+
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveBlueprint = Get-ChildItem "$env:CRAFT_ROOT\craft\blueprints" -Directory -Recurse -Filter kdenlive |
+            Where-Object { $_.FullName -match 'kdemultimedia' } |
+            Select-Object -First 1
+          if (-not $kdenliveBlueprint) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveBlueprint.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+
+      - name: Build and package Edit Aja
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          craft --package kde/kdemultimedia/editaja
+
+      - name: Collect Windows package and Craft logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'edit.?aja' -or $_.Name -match 'editaja' }
+          foreach ($p in $packages) {
+            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+          }
+          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($logs) {
+            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
