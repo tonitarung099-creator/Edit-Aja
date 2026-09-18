@@ -61,11 +61,9 @@ jobs:
         run: |
           # Kdenlive's current Windows Craft builds support Visual Studio 2022.
           # GitHub's windows-2022 runner already contains the MSVC toolchain.
-          # Craft warns when Git's sh or MinGW GCC leak into an MSVC build.
-          # Remove those conflicting directories only for the bootstrap process.
-          $pathParts = $env:PATH -split ';' | Where-Object {
-            $_ -and
-            $_ -notmatch '(?i)\\mingw64\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
+          # Keep Git/MinGW tools out of the MSVC Craft bootstrap.
+          $env:PATH = (($env:PATH -split ';' | Where-Object {
+            $_ -and $_ -notmatch '(?i)\\mingw64\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
           $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
           Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
           python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
@@ -206,8 +204,7 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
- -and
-            $_ -notmatch '(?i)\\Git\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
+ -and $_ -notmatch '(?i)\\Git\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
           $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
           Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
           python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
@@ -348,8 +345,7 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
- -and
-            $_ -notmatch '(?i)\\Git\\usr\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
+ -and $_ -notmatch '(?i)\\Git\\usr\\bin          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
           $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
           Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
           python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
@@ -491,9 +487,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-          }
-          $env:PATH = ($pathParts -join ';')
-          Write-Host 'Sanitized PATH for KDE Craft MSVC bootstrap.'
+          }) -join ';')
           New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
           $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
           Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
