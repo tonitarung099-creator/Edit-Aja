@@ -104,12 +104,12 @@ jobs:
         shell: pwsh
         run: |
           # Craft currently references an old HTTP tukaani.org URL for xz 5.2.3.
-          # The same upstream release is archived on SourceForge. Download the
-          # exact tarball and verify its published SHA-256 before Craft runs.
+          # Download the exact historical tarball from the OSUOSL Linux From Scratch
+          # mirror and verify the upstream SHA-256 before Craft runs.
           $xzDir = "$env:CRAFT_ROOT\download\archives\libs\liblzma"
           $xzFile = Join-Path $xzDir 'xz-5.2.3.tar.xz'
           New-Item -ItemType Directory -Force $xzDir | Out-Null
-          Invoke-WebRequest 'https://downloads.sourceforge.net/project/lzmautils/xz-5.2.3.tar.xz' -OutFile $xzFile
+          Invoke-WebRequest 'https://ftp.osuosl.org/pub/lfs/lfs-packages/8.2/xz-5.2.3.tar.xz' -OutFile $xzFile
           $sha = (Get-FileHash $xzFile -Algorithm SHA256).Hash.ToLower()
           Write-Host "XZ 5.2.3 SHA-256: $sha"
           if ($sha -ne '7876096b053ad598c31f6df35f7de5cd9ff2ba3162e5a5554e4fc198447e0347') {
