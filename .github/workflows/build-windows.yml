@@ -38,7 +38,7 @@ jobs:
         run: |
           python -c "import base64,bz2,hashlib,pathlib; p=pathlib.Path('patches'); n=['00','01','02','03','04.00','04.01','04.02','05.00','05.01','05.02']; s=''.join((p/f'phase5.patch.bz2.b64.{x}').read_text() for x in n); out=bz2.decompress(base64.b64decode(s)); h=hashlib.sha256(out).hexdigest(); print('Phase 5 SHA-256:',h); assert h=='$env:PHASE5_SHA256'; pathlib.Path('craft/editaja/phase5.patch').write_bytes(out)"
           Copy-Item branding/editaja-logo.png.b64 craft/editaja/editaja-logo.png.b64 -Force
-          Copy-Item scripts/apply_branding.py craft/editaja/apply_branding.py -Force
+          Copy-Item scripts/apply_branding.py craft/editaja/apply_branding.txt -Force
 
       - name: Reconstruct and verify corresponding source
         shell: pwsh
@@ -113,6 +113,93 @@ jobs:
       - name: Build and package Edit Aja
         shell: pwsh
         run: |
+          # GitHub's Windows image adds Git/MSYS and another MinGW to PATH in
+          # every step. Craft intentionally rejects those because it supplies
+          # its own toolchain, so sanitize PATH again immediately before build.
+          $env:PATH = (($env:PATH -split ';') | Where-Object {
+            $_ -and
+            $_ -notmatch '(?i)\\Git\\bin
+      - name: Collect Windows package
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          if (Test-Path "$env:CRAFT_ROOT\tmp") {
+            $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.exe','.zip','.7z' -and
+                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+              }
+            foreach ($p in $packages) {
+              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+            }
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+ -and
+            $_ -notmatch '(?i)\\Git\\usr\\bin
+      - name: Collect Windows package
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          if (Test-Path "$env:CRAFT_ROOT\tmp") {
+            $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.exe','.zip','.7z' -and
+                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+              }
+            foreach ($p in $packages) {
+              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+            }
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+ -and
+            $_ -notmatch '(?i)\\mingw64\\bin
+      - name: Collect Windows package
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          if (Test-Path "$env:CRAFT_ROOT\tmp") {
+            $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.exe','.zip','.7z' -and
+                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+              }
+            foreach ($p in $packages) {
+              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+            }
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+          }) -join ';'
           python "$env:CRAFT_ROOT\craft\bin\craft.py" --ci-mode --package kde/kdemultimedia/editaja
 
       - name: Collect Windows package
