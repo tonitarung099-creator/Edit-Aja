@@ -1,0 +1,12 @@
+diff --git a/src/aiassistant/agentipcserver.h b/src/aiassistant/agentipcserver.h
+index 7f25e1a..ca8beef 100644
+--- a/src/aiassistant/agentipcserver.h
++++ b/src/aiassistant/agentipcserver.h
+@@ -7,6 +7,7 @@
+ 
+ #include <QByteArray>
+ #include <QHash>
++#include <QJsonObject>
+ #include <QObject>
+ #include <QString>
+ 
