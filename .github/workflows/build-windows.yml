@@ -93,15 +93,14 @@ jobs:
           $text = Get-Content $cfg -Raw
           $text = [regex]::Replace($text, '(?m)^ABI\s*=.*$', 'ABI = windows-gcc-x86_64')
           $text = [regex]::Replace($text, '(?m)^MakeProgram\s*=.*$', 'MakeProgram = mingw32-make')
-          $text = [regex]::Replace($text, '(?m)^PATH\s*=.*$', 'PATH =')
           Set-Content -Path $cfg -Value $text -Encoding UTF8
-          Get-Content $cfg | Select-String 'ABI|MakeProgram|PATH'
+          Get-Content $cfg | Select-String 'ABI|MakeProgram'
 
       - name: Install Edit Aja Craft blueprint
         shell: pwsh
         run: |
           $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'kdemultimedia[\\/]kdenlive[\\/]kdenlive\.py$' } |
+            Where-Object { $_.FullName -match 'kdemultimedia[\/]kdenlive[\/]kdenlive\.py$' } |
             Select-Object -First 1
           if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
           $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
@@ -113,92 +112,11 @@ jobs:
       - name: Build and package Edit Aja
         shell: pwsh
         run: |
-          # GitHub's Windows image adds Git/MSYS and another MinGW to PATH in
-          # every step. Craft intentionally rejects those because it supplies
-          # its own toolchain, so sanitize PATH again immediately before build.
           $env:PATH = (($env:PATH -split ';') | Where-Object {
             $_ -and
-            $_ -notmatch '(?i)\\Git\\bin
-      - name: Collect Windows package
-        if: always()
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          if (Test-Path "$env:CRAFT_ROOT\tmp") {
-            $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.Extension -in '.exe','.zip','.7z' -and
-                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
-              }
-            foreach ($p in $packages) {
-              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
-            }
-          }
-          Get-ChildItem artifacts -File | Format-Table Name, Length
-
-      - name: Upload Edit Aja artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Edit-Aja-Windows-x64
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 14
- -and
-            $_ -notmatch '(?i)\\Git\\usr\\bin
-      - name: Collect Windows package
-        if: always()
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          if (Test-Path "$env:CRAFT_ROOT\tmp") {
-            $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.Extension -in '.exe','.zip','.7z' -and
-                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
-              }
-            foreach ($p in $packages) {
-              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
-            }
-          }
-          Get-ChildItem artifacts -File | Format-Table Name, Length
-
-      - name: Upload Edit Aja artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Edit-Aja-Windows-x64
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 14
- -and
-            $_ -notmatch '(?i)\\mingw64\\bin
-      - name: Collect Windows package
-        if: always()
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          if (Test-Path "$env:CRAFT_ROOT\tmp") {
-            $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.Extension -in '.exe','.zip','.7z' -and
-                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
-              }
-            foreach ($p in $packages) {
-              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
-            }
-          }
-          Get-ChildItem artifacts -File | Format-Table Name, Length
-
-      - name: Upload Edit Aja artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Edit-Aja-Windows-x64
-          path: artifacts/*
-          if-no-files-found: error
-          retention-days: 14
-
+            $_ -notmatch '(?i)\\Git\\bin$' -and
+            $_ -notmatch '(?i)\\Git\\usr\\bin$' -and
+            $_ -notmatch '(?i)\\mingw64\\bin$'
           }) -join ';'
           python "$env:CRAFT_ROOT\craft\bin\craft.py" --ci-mode --package kde/kdemultimedia/editaja
 
