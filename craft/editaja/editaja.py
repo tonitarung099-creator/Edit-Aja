@@ -83,7 +83,7 @@ class Package(CraftPackageObject.get("kde").pattern):
         # Craft has already fetched the pinned source and applied Phase 5 here.
         marker = self.sourceDir() / "EDIT_AJA_BRANDING.md"
         if not marker.exists():
-            script = self.blueprintDir() / "apply_branding.py"
+            script = self.blueprintDir() / "apply_branding.txt"
             assets = self.blueprintDir()
             result = subprocess.run(
                 [sys.executable, str(script), str(self.sourceDir()), "--assets", str(assets)],
