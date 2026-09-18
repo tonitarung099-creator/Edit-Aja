@@ -4,6 +4,11 @@ on:
   push:
     paths:
       - '.github/workflows/cancel-stale-builds.yml'
+      - '.github/workflows/build-windows.yml'
+      - 'patches/**'
+      - 'branding/**'
+      - 'scripts/**'
+      - 'craft/**'
   workflow_dispatch:
 
 permissions:
