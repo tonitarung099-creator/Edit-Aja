@@ -33,7 +33,7 @@ the Windows installer artifact.
 
 ## Repository layout
 
-- `patches/phase5.patch.gz.b64` — Phase 1–5 source changes.
+- `patches/phase5.patch.bz2.b64.*` — chunked, compressed Phase 1–5 source changes.
 - `scripts/apply_branding.py` — Edit Aja user-facing branding.
 - `branding/` — Edit Aja Windows icon assets, stored as base64 text.
 - `craft/editaja/editaja.py` — custom KDE Craft package blueprint.
@@ -41,5 +41,4 @@ the Windows installer artifact.
 
 ## Build status
 
-The first Windows package build is started automatically when the build workflow
-is committed. The workflow uses KDE Craft and publishes artifacts from the run.
+Windows builds run through GitHub Actions. Before compiling, the workflow reassembles the Phase 5 chunks and verifies the exact patch SHA-256 (`682be7bcb5afd875eb5f347ecd8f644be5fa1273e175c027ddd1d67491ac9a65`). It then uses KDE Craft and publishes the Windows package plus corresponding source as build artifacts.
