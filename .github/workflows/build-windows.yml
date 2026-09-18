@@ -43,8 +43,11 @@ jobs:
       - name: Reconstruct and verify corresponding source
         shell: pwsh
         run: |
-          git clone https://github.com/KDE/kdenlive.git corresponding-source
-          git -C corresponding-source checkout $env:UPSTREAM_COMMIT
+          New-Item -ItemType Directory -Force corresponding-source | Out-Null
+          git -C corresponding-source init
+          git -C corresponding-source remote add origin https://github.com/KDE/kdenlive.git
+          git -C corresponding-source fetch --depth 1 origin $env:UPSTREAM_COMMIT
+          git -C corresponding-source checkout --detach FETCH_HEAD
           git -C corresponding-source apply --ignore-space-change -p2 "$env:GITHUB_WORKSPACE\craft\editaja\phase5.patch"
           python scripts/apply_branding.py corresponding-source --assets branding
           if (-not (Select-String -Path corresponding-source/src/main.cpp -Pattern 'i18n\("Edit Aja"\)' -Quiet)) {
