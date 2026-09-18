@@ -72,7 +72,7 @@ jobs:
           New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
           $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
           Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
-          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults --buildtype Release
+          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
 
           $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
           if (-not (Test-Path $cfg)) { throw "Craft settings not found: $cfg" }
