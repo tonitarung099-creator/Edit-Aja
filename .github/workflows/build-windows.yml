@@ -113,8 +113,7 @@ jobs:
       - name: Build and package Edit Aja
         shell: pwsh
         run: |
-          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
-          craft --package kde/kdemultimedia/editaja
+          python "$env:CRAFT_ROOT\craft\bin\craft.py" --ci-mode --package kde/kdemultimedia/editaja
 
       - name: Collect Windows package
         if: always()
