@@ -103,7 +103,11 @@ jobs:
         shell: pwsh
         run: |
           $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'kdemultimedia[\/]kdenlive[\/]kdenlive\.py$' } |
+            Where-Object {
+              $_.Directory.Name -eq 'kdenlive' -and
+              $_.Directory.Parent -and
+              $_.Directory.Parent.Name -eq 'kdemultimedia'
+            } |
             Select-Object -First 1
           if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
           $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
