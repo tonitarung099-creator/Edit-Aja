@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 import re
+import struct
 from pathlib import Path
 
 APP_NAME = "Edit Aja"
@@ -41,8 +42,16 @@ def replace_regex(path: Path, pattern: str, repl: str, *, flags: int = 0) -> Non
     write_text(path, updated)
 
 
-def decode_asset(asset_dir: Path, name: str) -> bytes:
-    return base64.b64decode((asset_dir / f"{name}.b64").read_text(encoding="ascii"))
+def decode_logo(asset_dir: Path) -> bytes:
+    return base64.b64decode((asset_dir / "editaja-logo.png.b64").read_text(encoding="ascii"))
+
+
+def png_to_ico(png: bytes, width: int = 64, height: int = 64) -> bytes:
+    # ICO supports PNG-compressed image payloads. A single 64x64 entry keeps the
+    # public branding asset compact and requires no non-stdlib Python package.
+    header = struct.pack("<HHH", 0, 1, 1)
+    entry = struct.pack("<BBBBHHII", width if width < 256 else 0, height if height < 256 else 0, 0, 0, 1, 32, len(png), 22)
+    return header + entry + png
 
 
 def apply(root: Path, asset_dir: Path) -> None:
@@ -51,9 +60,10 @@ def apply(root: Path, asset_dir: Path) -> None:
 
     # Windows/app runtime icons. Keep the historical filenames because several
     # Kdenlive build/packaging paths refer to them internally.
-    (root / "data/icons/256-apps-kdenlive.png").write_bytes(decode_asset(asset_dir, "editaja-256.png"))
-    (root / "data/icons/kdenlive.ico").write_bytes(decode_asset(asset_dir, "editaja.ico"))
-    (root / "data/pics/kdenlive-logo.png").write_bytes(decode_asset(asset_dir, "editaja-256.png"))
+    logo_png = decode_logo(asset_dir)
+    (root / "data/icons/256-apps-kdenlive.png").write_bytes(logo_png)
+    (root / "data/icons/kdenlive.ico").write_bytes(png_to_ico(logo_png))
+    (root / "data/pics/kdenlive-logo.png").write_bytes(logo_png)
 
     # Use our 256 px icon for the embedded Qt resource shown in the main window.
     replace(root / "src/icons.qrc", "../data/icons/48-apps-kdenlive.png", "../data/icons/256-apps-kdenlive.png")
