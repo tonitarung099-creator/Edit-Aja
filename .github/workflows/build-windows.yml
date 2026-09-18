@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 360
     env:
       UPSTREAM_COMMIT: c3d8a38c04470f6726b21485fc488f2cd2921654
@@ -113,22 +113,20 @@ jobs:
           . "$env:CRAFT_ROOT\craft\craftenv.ps1"
           craft --package kde/kdemultimedia/editaja
 
-      - name: Collect Windows package and Craft logs
+      - name: Collect Windows package
         if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
-          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object {
-              $_.Extension -in '.exe','.zip','.7z' -and
-              ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+          if (Test-Path "$env:CRAFT_ROOT\tmp") {
+            $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.exe','.zip','.7z' -and
+                ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+              }
+            foreach ($p in $packages) {
+              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
             }
-          foreach ($p in $packages) {
-            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
-          }
-          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($logs) {
-            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
           }
           Get-ChildItem artifacts -File | Format-Table Name, Length
 
