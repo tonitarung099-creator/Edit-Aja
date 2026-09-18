@@ -53,22 +53,317 @@ jobs:
           Remove-Item -Recurse -Force corresponding-source/.git
           Compress-Archive -Path corresponding-source/* -DestinationPath artifacts/Edit-Aja-Source.zip -CompressionLevel Optimal
 
-      - name: Install KDE Craft
+      - name: Install KDE Craft with MinGW x64
         shell: pwsh
         run: |
-          Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/install_craft.ps1 -OutFile install_craft.ps1
-          & .\install_craft.ps1 -root $env:CRAFT_ROOT -use-defaults
+          # Craft warns about host sh/gcc leaking into its environment. Keep Git's
+          # cmd shim, but remove the Unix/host MinGW tool directories for bootstrap.
+          $env:PATH = (($env:PATH -split ';') | Where-Object {
+            $_ -and
+            $_ -notmatch '(?i)\\Git\\bin
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'kdemultimedia[\\/]kdenlive[\\/]kdenlive\.py$' } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
 
-      - name: Switch Craft to MinGW x64
+      - name: Build and package Edit Aja
         shell: pwsh
         run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          craft --package kde/kdemultimedia/editaja
+
+      - name: Collect Windows package and Craft logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in '.exe','.zip','.7z' -and
+              ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+            }
+          foreach ($p in $packages) {
+            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+          }
+          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($logs) {
+            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+ -and
+            $_ -notmatch '(?i)\\Git\\usr\\bin
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'kdemultimedia[\\/]kdenlive[\\/]kdenlive\.py$' } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Build and package Edit Aja
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          craft --package kde/kdemultimedia/editaja
+
+      - name: Collect Windows package and Craft logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in '.exe','.zip','.7z' -and
+              ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+            }
+          foreach ($p in $packages) {
+            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+          }
+          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($logs) {
+            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+ -and
+            $_ -notmatch '(?i)\\mingw64\\bin
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'kdemultimedia[\\/]kdenlive[\\/]kdenlive\.py$' } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Build and package Edit Aja
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          craft --package kde/kdemultimedia/editaja
+
+      - name: Collect Windows package and Craft logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in '.exe','.zip','.7z' -and
+              ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+            }
+          foreach ($p in $packages) {
+            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+          }
+          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($logs) {
+            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+          }) -join ';'
+
+          New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
+          $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
+          Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
+
+          # Upstream's unattended Windows default is MSVC. Kdenlive's own build
+          # documentation recommends MinGW, so make MinGW the unattended default.
+          python -c "from pathlib import Path; p=Path(r'$bootstrap'); s=p.read_text(); old='            ],\n            (\"msvc2022\", \"cl\"),\n            returnDefaultWithoutPrompt=args.use_defaults,'; new='            ],\n            (None, \"gcc\"),\n            returnDefaultWithoutPrompt=args.use_defaults,'; assert old in s; p.write_text(s.replace(old,new,1))"
+          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
+
           $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
           if (-not (Test-Path $cfg)) { throw "Craft settings not found: $cfg" }
           $text = Get-Content $cfg -Raw
-          $text = [regex]::Replace($text, '(?m)^ABI\s*=.*$', 'ABI = windows-gcc-x86_64')
-          $text = [regex]::Replace($text, '(?m)^MakeProgram\s*=.*$', 'MakeProgram = mingw32-make')
+          $text = [regex]::Replace($text, '(?m)^ABI\s*=.*
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'kdemultimedia[\\/]kdenlive[\\/]kdenlive\.py$' } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Build and package Edit Aja
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          craft --package kde/kdemultimedia/editaja
+
+      - name: Collect Windows package and Craft logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in '.exe','.zip','.7z' -and
+              ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+            }
+          foreach ($p in $packages) {
+            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+          }
+          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($logs) {
+            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+, 'ABI = windows-gcc-x86_64')
+          $text = [regex]::Replace($text, '(?m)^MakeProgram\s*=.*
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'kdemultimedia[\\/]kdenlive[\\/]kdenlive\.py$' } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Build and package Edit Aja
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          craft --package kde/kdemultimedia/editaja
+
+      - name: Collect Windows package and Craft logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in '.exe','.zip','.7z' -and
+              ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+            }
+          foreach ($p in $packages) {
+            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+          }
+          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($logs) {
+            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+, 'MakeProgram = mingw32-make')
+          $text = [regex]::Replace($text, '(?m)^PATH\s*=.*
+      - name: Install Edit Aja Craft blueprint
+        shell: pwsh
+        run: |
+          $kdenliveFile = Get-ChildItem "$env:CRAFT_ROOT" -File -Recurse -Filter kdenlive.py -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'kdemultimedia[\\/]kdenlive[\\/]kdenlive\.py$' } |
+            Select-Object -First 1
+          if (-not $kdenliveFile) { throw 'Could not locate the Kdenlive Craft blueprint' }
+          $target = Join-Path $kdenliveFile.Directory.Parent.FullName 'editaja'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item craft/editaja/* $target -Recurse -Force
+          Write-Host "Edit Aja blueprint: $target"
+          Get-ChildItem $target
+
+      - name: Build and package Edit Aja
+        shell: pwsh
+        run: |
+          . "$env:CRAFT_ROOT\craft\craftenv.ps1"
+          craft --package kde/kdemultimedia/editaja
+
+      - name: Collect Windows package and Craft logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $packages = Get-ChildItem "$env:CRAFT_ROOT\tmp" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in '.exe','.zip','.7z' -and
+              ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
+            }
+          foreach ($p in $packages) {
+            Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+          }
+          $logs = Get-ChildItem "$env:CRAFT_ROOT" -Directory -Recurse -Filter logs -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($logs) {
+            Compress-Archive -Path "$($logs.FullName)\*" -DestinationPath artifacts/Craft-logs.zip -Force
+          }
+          Get-ChildItem artifacts -File | Format-Table Name, Length
+
+      - name: Upload Edit Aja artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Windows-x64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+, 'PATH =')
           Set-Content -Path $cfg -Value $text -Encoding UTF8
-          Get-Content $cfg | Select-String 'ABI|MakeProgram'
+          Get-Content $cfg | Select-String 'ABI|MakeProgram|PATH'
 
       - name: Install Edit Aja Craft blueprint
         shell: pwsh
