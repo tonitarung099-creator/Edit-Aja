@@ -28,7 +28,7 @@ jobs:
       UPSTREAM_COMMIT: c3d8a38c04470f6726b21485fc488f2cd2921654
       PHASE5_SHA256: 682be7bcb5afd875eb5f347ecd8f644be5fa1273e175c027ddd1d67491ac9a65
       CRAFT_ROOT: C:\CraftRoot
-      CRAFT_BUILD_TYPE: RelWithDebInfo
+      CRAFT_BUILD_TYPE: Release
 
     steps:
       - name: Checkout Edit Aja build repository
@@ -72,7 +72,7 @@ jobs:
           New-Item -ItemType Directory -Force "$env:CRAFT_ROOT\download" | Out-Null
           $bootstrap = "$env:CRAFT_ROOT\download\CraftBootstrap.py"
           Invoke-WebRequest https://raw.githubusercontent.com/KDE/craft/master/setup/CraftBootstrap.py -OutFile $bootstrap
-          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults
+          python $bootstrap --prefix $env:CRAFT_ROOT --branch master --use-defaults --buildtype Release
 
           $cfg = Join-Path $env:CRAFT_ROOT 'etc\CraftSettings.ini'
           if (-not (Test-Path $cfg)) { throw "Craft settings not found: $cfg" }
