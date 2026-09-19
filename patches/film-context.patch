@@ -1,0 +1,184 @@
+diff --git a/src/aiassistant/aiassistantwidget.cpp b/src/aiassistant/aiassistantwidget.cpp
+index 64961f0..609f19a 100644
+--- a/src/aiassistant/aiassistantwidget.cpp
++++ b/src/aiassistant/aiassistantwidget.cpp
+@@ -696,6 +696,20 @@ void AiAssistantWidget::registerTools()
+         QStringLiteral("Inspect the active project's file path, profile, dimensions, fps, duration and modified state."),
+         QJsonObject{{QStringLiteral("type"), QStringLiteral("object")}, {QStringLiteral("properties"), QJsonObject{}}});
+ 
++    registerNativeTool(
++        QStringLiteral("kdenlive_get_film_context"),
++        QStringLiteral("Build a compact local JSON description of the current project, media bin and timeline so an AI agent can understand the edit without uploading or watching the full movie."),
++        QJsonObject{{QStringLiteral("type"), QStringLiteral("object")},
++                    {QStringLiteral("properties"),
++                     QJsonObject{{QStringLiteral("include_bin_clips"), booleanProperty},
++                                 {QStringLiteral("include_timeline_items"), booleanProperty},
++                                 {QStringLiteral("start_frame"), integerProperty},
++                                 {QStringLiteral("end_frame"), integerProperty},
++                                 {QStringLiteral("max_items"), QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")},
++                                                                           {QStringLiteral("minimum"), 1},
++                                                                           {QStringLiteral("maximum"), 5000}}},
++                                 {QStringLiteral("save_path"), stringProperty}}}});
++
+     registerNativeTool(
+         QStringLiteral("kdenlive_save_project"),
+         QStringLiteral("Save the current project, or save a project copy to an explicit path."),
+diff --git a/src/mainwindow.cpp b/src/mainwindow.cpp
+index fbcc7ce..dd1a2b3 100644
+--- a/src/mainwindow.cpp
++++ b/src/mainwindow.cpp
+@@ -128,6 +128,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+ #include <QFileDialog>
+ #include <QFileInfo>
+ #include <QJsonArray>
++#include <QJsonDocument>
+ #include <QJsonObject>
+ #include <QKeySequence>
+ #include <QMenu>
+@@ -1798,6 +1799,146 @@ void MainWindow::init()
+                                    {QStringLiteral("duration_seconds"), controller->duration() / fps}};
+             }
+ 
++            if (toolName == QLatin1String("kdenlive_get_film_context")) {
++                KdenliveDoc *project = pCore->currentDoc();
++                const auto profile = pCore->getCurrentProfile();
++                if (!project || !profile) {
++                    return errorResult(QStringLiteral("No active project/profile"));
++                }
++
++                const bool includeBin = arguments.value(QStringLiteral("include_bin_clips")).toBool(true);
++                const bool includeItems = arguments.value(QStringLiteral("include_timeline_items")).toBool(true);
++                const int startFrame = qMax(0, arguments.value(QStringLiteral("start_frame")).toInt(0));
++                const int requestedEnd = arguments.contains(QStringLiteral("end_frame"))
++                                             ? arguments.value(QStringLiteral("end_frame")).toInt(controller->duration())
++                                             : controller->duration();
++                const int endFrame = qBound(startFrame, requestedEnd, qMax(startFrame, controller->duration()));
++                const int maxItems = qBound(1, arguments.value(QStringLiteral("max_items")).toInt(2000), 5000);
++
++                QJsonArray tracks;
++                QList<int> trackIds = model->getTracksIds(false);
++                trackIds.append(model->getTracksIds(true));
++                std::sort(trackIds.begin(), trackIds.end(), [model](int a, int b) { return model->getTrackPosition(a) < model->getTrackPosition(b); });
++                for (int trackId : std::as_const(trackIds)) {
++                    if (!model->isTrack(trackId)) {
++                        continue;
++                    }
++                    tracks.push_back(QJsonObject{{QStringLiteral("id"), trackId},
++                                                 {QStringLiteral("tag"), model->getTrackTagById(trackId)},
++                                                 {QStringLiteral("position"), model->getTrackPosition(trackId)},
++                                                 {QStringLiteral("audio"), model->isAudioTrack(trackId)},
++                                                 {QStringLiteral("locked"), model->trackIsLocked(trackId)},
++                                                 {QStringLiteral("clip_count"), model->getTrackClipsCount(trackId)},
++                                                 {QStringLiteral("composition_count"), model->getTrackCompositionsCount(trackId)}});
++                }
++
++                QJsonArray items;
++                int totalItemsInScope = 0;
++                bool truncated = false;
++                if (includeItems) {
++                    const auto itemIds = model->getItemsInRange(-1, startFrame, endFrame, true);
++                    totalItemsInScope = itemIds.size();
++                    for (int itemId : itemIds) {
++                        if (items.size() >= maxItems) {
++                            truncated = true;
++                            break;
++                        }
++                        QJsonObject item{{QStringLiteral("id"), itemId},
++                                         {QStringLiteral("position_frame"), model->getItemPosition(itemId)},
++                                         {QStringLiteral("duration_frames"), model->getItemPlaytime(itemId)},
++                                         {QStringLiteral("end_frame"), model->getItemEnd(itemId)}};
++                        if (model->isClip(itemId)) {
++                            const auto inOut = model->getClipInOut(itemId);
++                            item.insert(QStringLiteral("kind"), QStringLiteral("clip"));
++                            item.insert(QStringLiteral("track_id"), model->getClipTrackId(itemId));
++                            item.insert(QStringLiteral("name"), model->getClipName(itemId));
++                            item.insert(QStringLiteral("bin_id"), model->getClipBinId(itemId));
++                            item.insert(QStringLiteral("source_in"), inOut.first);
++                            item.insert(QStringLiteral("source_out"), inOut.second);
++                            item.insert(QStringLiteral("speed"), model->getClipSpeed(itemId));
++                        } else if (model->isComposition(itemId)) {
++                            item.insert(QStringLiteral("kind"), QStringLiteral("composition"));
++                            item.insert(QStringLiteral("track_id"), model->getCompositionTrackId(itemId));
++                        } else if (model->isSubTitle(itemId)) {
++                            item.insert(QStringLiteral("kind"), QStringLiteral("subtitle"));
++                            item.insert(QStringLiteral("subtitle_layer"), model->getSubtitleLayer(itemId));
++                            const auto subtitleModel = model->getSubtitleModel();
++                            if (subtitleModel) {
++                                item.insert(QStringLiteral("text"), subtitleModel->getText(itemId));
++                            }
++                        } else {
++                            item.insert(QStringLiteral("kind"), QStringLiteral("unknown"));
++                        }
++                        items.push_back(item);
++                    }
++                }
++
++                QJsonArray binClips;
++                if (includeBin) {
++                    const auto projectModel = pCore->projectItemModel();
++                    if (projectModel) {
++                        const QStringList clipIds = projectModel->getAllClipIds();
++                        for (const QString &binId : clipIds) {
++                            const auto clip = projectModel->getClipByBinID(binId);
++                            if (!clip) {
++                                continue;
++                            }
++                            const int durationFrames = static_cast<int>(clip->duration().frames(fps));
++                            binClips.push_back(QJsonObject{{QStringLiteral("bin_id"), binId},
++                                                           {QStringLiteral("name"), clip->clipName()},
++                                                           {QStringLiteral("url"), clip->url()},
++                                                           {QStringLiteral("duration_frames"), durationFrames},
++                                                           {QStringLiteral("duration_seconds"), durationFrames / fps}});
++                        }
++                    }
++                }
++
++                QJsonObject context{{QStringLiteral("schema"), QStringLiteral("editaja.film-context")},
++                                    {QStringLiteral("schema_version"), 1},
++                                    {QStringLiteral("generated_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
++                                    {QStringLiteral("local_only"), true},
++                                    {QStringLiteral("project"),
++                                     QJsonObject{{QStringLiteral("path"), project->url().isLocalFile() ? project->url().toLocalFile() : project->url().toString()},
++                                                 {QStringLiteral("document_root"), project->documentRoot()},
++                                                 {QStringLiteral("modified"), project->isModified()},
++                                                 {QStringLiteral("profile"), profile->description()},
++                                                 {QStringLiteral("width"), profile->width()},
++                                                 {QStringLiteral("height"), profile->height()},
++                                                 {QStringLiteral("fps"), profile->fps()},
++                                                 {QStringLiteral("duration_frames"), controller->duration()},
++                                                 {QStringLiteral("duration_seconds"), controller->duration() / fps}}},
++                                    {QStringLiteral("scope"),
++                                     QJsonObject{{QStringLiteral("start_frame"), startFrame},
++                                                 {QStringLiteral("end_frame"), endFrame},
++                                                 {QStringLiteral("start_seconds"), startFrame / fps},
++                                                 {QStringLiteral("end_seconds"), endFrame / fps}}},
++                                    {QStringLiteral("tracks"), tracks},
++                                    {QStringLiteral("timeline_items"), items},
++                                    {QStringLiteral("timeline_item_count"), totalItemsInScope},
++                                    {QStringLiteral("timeline_items_truncated"), truncated},
++                                    {QStringLiteral("bin_clips"), binClips},
++                                    {QStringLiteral("note"),
++                                     QStringLiteral("This is a local structural summary. It does not upload media and does not claim semantic understanding of frames that were not analyzed locally.")}};
++
++                const QString savePath = arguments.value(QStringLiteral("save_path")).toString().trimmed();
++                if (!savePath.isEmpty()) {
++                    QFileInfo output(savePath);
++                    if (!output.dir().exists() && !output.dir().mkpath(QStringLiteral("."))) {
++                        return errorResult(QStringLiteral("Could not create film-context output directory"));
++                    }
++                    QFile file(output.absoluteFilePath());
++                    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
++                        return errorResult(QStringLiteral("Could not write film-context JSON: %1").arg(file.errorString()));
++                    }
++                    file.write(QJsonDocument(context).toJson(QJsonDocument::Indented));
++                    file.close();
++                    context.insert(QStringLiteral("saved_path"), output.absoluteFilePath());
++                }
++
++                context.insert(QStringLiteral("ok"), true);
++                return context;
++            }
++
+             if (toolName == QLatin1String("kdenlive_save_project")) {
+                 const QString path = arguments.value(QStringLiteral("path")).toString().trimmed();
+                 bool success = false;
