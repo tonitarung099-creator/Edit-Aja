@@ -35,8 +35,11 @@ jobs:
           Copy-Item scripts/apply_branding.py craft/editaja/apply_branding.txt -Force
 
       - name: Reconstruct and verify corresponding source
+        id: corresponding_source
         shell: pwsh
         run: |
+          # PowerShell otherwise continues after a failed native git/python command.
+          $PSNativeCommandUseErrorActionPreference = $true
           New-Item -ItemType Directory -Force corresponding-source | Out-Null
           git -C corresponding-source init
           git -C corresponding-source remote add origin https://github.com/KDE/kdenlive.git
@@ -173,20 +176,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Collect Windows package
-        if: always()
+        id: windows_package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null
+          # Run only after a successful build and package step. Keep source
+          # archives out of the directory published as the Windows application.
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
           $binaryCount = 0
 
           if (Test-Path "$env:CRAFT_ROOT\craft\bin\craft.py") {
             $setup = ConvertFrom-Json (& python "$env:CRAFT_ROOT\craft\bin\CraftSetupHelper.py" --setup --format=json)
-          foreach ($property in $setup.PSObject.Properties) {
-            Set-Item -Force -Path "Env:$($property.Name)" -Value "$($property.Value)"
-          }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            foreach ($property in $setup.PSObject.Properties) {
+              Set-Item -Force -Path "Env:$($property.Name)" -Value "$($property.Value)"
+            }
             $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
             $packageDirOutput = & python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE -q --get "packageDestinationDir()" virtual/base 2>$null
-            $packageDir = ($packageDirOutput | Select-Object -Last 1).Trim()
+            # An empty query result must still allow the fallback search below.
+            $packageDir = "$($packageDirOutput | Select-Object -Last 1)".Trim()
 
             if ($packageDir -and (Test-Path $packageDir)) {
               Write-Host "Craft package directory: $packageDir"
@@ -196,7 +203,7 @@ jobs:
                   ($_.Name -match 'edit.?aja' -or $_.Name -match 'editaja')
                 }
               foreach ($p in $packages) {
-                Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+                Copy-Item $p.FullName (Join-Path 'artifacts/windows' $p.Name) -Force
                 if ($p.Extension -in '.exe','.zip','.7z') { $binaryCount++ }
               }
             }
@@ -211,21 +218,33 @@ jobs:
               } |
               Select-Object -First 10
             foreach ($p in $packages) {
-              Copy-Item $p.FullName (Join-Path 'artifacts' $p.Name) -Force
+              Copy-Item $p.FullName (Join-Path 'artifacts/windows' $p.Name) -Force
               $binaryCount++
             }
           }
 
-          Get-ChildItem artifacts -File | Format-Table Name, Length
+          Get-ChildItem artifacts/windows -File | Format-Table Name, Length
           if ($binaryCount -eq 0) {
             throw 'No runnable Edit Aja Windows package was produced.'
           }
+          # A successful fallback supersedes the optional directory query's
+          # exit code, which the Actions PowerShell wrapper otherwise reuses.
+          $global:LASTEXITCODE = 0
 
-      - name: Upload Edit Aja artifacts
-        if: always()
+      - name: Upload Edit Aja Windows package
+        if: ${{ success() && steps.windows_package.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: Edit-Aja-Windows-x64
-          path: artifacts/*
+          path: artifacts/windows/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload verified corresponding source
+        if: ${{ always() && steps.corresponding_source.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Edit-Aja-Source
+          path: artifacts/Edit-Aja-Source.zip
           if-no-files-found: error
           retention-days: 14
