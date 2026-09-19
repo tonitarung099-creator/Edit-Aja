@@ -16,7 +16,7 @@ class subinfo(info.infoclass):
         # url|branch|revision: an empty branch plus the full SHA pins the exact
         # upstream source used when Phase 5 was created.
         self.svnTargets["editaja"] = f"https://github.com/KDE/kdenlive.git||{UPSTREAM_COMMIT}"
-        self.patchToApply["editaja"] = [("phase5.patch", 2), ("build-fixes.patch", 1)]
+        self.patchToApply["editaja"] = [("phase5.patch", 2), ("build-fixes.patch", 1), ("film-context.patch", 1)]
         self.defaultTarget = "editaja"
         self.description = "Open-source AI-assisted video editor based on Kdenlive"
         self.webpage = "https://github.com/tonitarung099-creator/Edit-Aja"
