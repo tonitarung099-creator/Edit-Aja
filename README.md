@@ -11,6 +11,7 @@ Edit Aja branding and packages the result.
 - Built-in OpenAI-compatible API agent.
 - MCP and localhost REST/JSON bridges.
 - Shared native editing tool registry.
+- Local `editaja.film-context` JSON summary for project/timeline/media structure, exposed as `kdenlive_get_film_context` without uploading the movie.
 - Edit Aja branding and Windows icon.
 - Reproducible Windows build workflow.
 
@@ -34,6 +35,7 @@ the Windows installer artifact.
 ## Repository layout
 
 - `patches/phase5.patch.bz2.b64.*` — chunked, compressed Phase 1–5 source changes.
+- `patches/film-context.patch` — optional local-first project/timeline/media JSON context layer for AI agents.
 - `scripts/apply_branding.py` — Edit Aja user-facing branding.
 - `branding/` — Edit Aja Windows icon assets, stored as base64 text.
 - `craft/editaja/editaja.py` — custom KDE Craft package blueprint.
