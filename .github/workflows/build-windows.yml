@@ -193,7 +193,7 @@ jobs:
             $craft = "$env:CRAFT_ROOT\craft\bin\craft.py"
             $packageDirOutput = & python $craft --ci-mode --buildtype $env:CRAFT_BUILD_TYPE -q --get "packageDestinationDir()" virtual/base 2>$null
             # An empty query result must still allow the fallback search below.
-            $packageDir = ([string]($packageDirOutput | Select-Object -Last 1)).Trim()
+            $packageDir = "$($packageDirOutput | Select-Object -Last 1)".Trim()
 
             if ($packageDir -and (Test-Path $packageDir)) {
               Write-Host "Craft package directory: $packageDir"
@@ -227,6 +227,9 @@ jobs:
           if ($binaryCount -eq 0) {
             throw 'No runnable Edit Aja Windows package was produced.'
           }
+          # A successful fallback supersedes the optional directory query's
+          # exit code, which the Actions PowerShell wrapper otherwise reuses.
+          $global:LASTEXITCODE = 0
 
       - name: Upload Edit Aja Windows package
         if: ${{ success() && steps.windows_package.outcome == 'success' }}
