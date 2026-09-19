@@ -41,7 +41,7 @@ index fbcc7ce..dd1a2b3 100644
  
 +            if (toolName == QLatin1String("kdenlive_get_film_context")) {
 +                KdenliveDoc *project = pCore->currentDoc();
-+                const auto profile = pCore->getCurrentProfile();
++                const auto &profile = pCore->getCurrentProfile();
 +                if (!project || !profile) {
 +                    return errorResult(QStringLiteral("No active project/profile"));
 +                }
