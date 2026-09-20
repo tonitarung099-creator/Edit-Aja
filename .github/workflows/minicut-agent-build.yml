@@ -40,7 +40,7 @@ jobs:
         run: |
           python -m compileall -q minicut_agent main.py mcp_server.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -c "from minicut_agent.ui import MiniCutWindow; print('ui-import-ok')"
+          python -c "from minicut_agent.ui import MiniCutWindow; from minicut_agent.gemini_keys import GeminiKeyStore; print('ui-import-ok')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -c "import mcp_server; print('mcp-import-ok')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -53,7 +53,7 @@ jobs:
       - name: Build MiniCut Studio Agent
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --windowed --name "MiniCut Studio Agent" --hidden-import PySide6.QtMultimedia --hidden-import PySide6.QtMultimediaWidgets main.py
+          pyinstaller --noconfirm --clean --windowed --name "MiniCut Studio Agent" --hidden-import PySide6.QtMultimedia --hidden-import PySide6.QtMultimediaWidgets --collect-data tzdata main.py
 
       - name: Build MCP companion
         shell: pwsh
