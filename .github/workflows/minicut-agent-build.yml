@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - minicut-agent-build
+      - minicut-gemini-film-cut
     paths:
       - "tools/minicut-agent/**"
       - ".github/workflows/minicut-agent-build.yml"
@@ -41,6 +42,11 @@ jobs:
           python -c "from minicut_agent.ui import MiniCutWindow; print('ui-import-ok')"
           python -c "import mcp_server; print('mcp-import-ok')"
 
+      - name: Unit tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -v
+
       - name: Build MiniCut Studio Agent
         shell: pwsh
         run: |
@@ -69,11 +75,11 @@ jobs:
       - name: Package ZIP
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/MiniCut Studio Agent/*" -DestinationPath "MiniCut-Studio-Agent-Windows-Lite.zip" -Force
+          Compress-Archive -Path "dist/MiniCut Studio Agent/*" -DestinationPath "MiniCut-Studio-Agent-Gemini-Windows.zip" -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCut-Studio-Agent-Windows-Lite
-          path: tools/minicut-agent/MiniCut-Studio-Agent-Windows-Lite.zip
+          name: MiniCut-Studio-Agent-Gemini-Windows
+          path: tools/minicut-agent/MiniCut-Studio-Agent-Gemini-Windows.zip
           if-no-files-found: error
