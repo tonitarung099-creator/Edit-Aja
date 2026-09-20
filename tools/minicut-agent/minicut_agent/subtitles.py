@@ -94,8 +94,8 @@ class SubtitleTrack:
         for cue in self.cues:
             if cue.end_ms < start_ms or cue.start_ms > end_ms:
                 continue
-            before_start = cue.start_ms - 120
-            after_end = cue.end_ms + 120
+            before_start = cue.start_ms - 420
+            after_end = cue.end_ms + 420
             if start_ms <= before_start <= end_ms:
                 result.append(before_start)
             if start_ms <= after_end <= end_ms:
