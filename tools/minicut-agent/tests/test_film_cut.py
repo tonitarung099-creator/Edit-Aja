@@ -1,8 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from minicut_agent.candidates import rank_candidates, target_times
+from minicut_agent.frame_resolver import resolve_semantic_frame
+from minicut_agent.gemini import _bounded_offset
 from minicut_agent.subtitles import SubtitleTrack
 
 
@@ -52,6 +55,45 @@ class CandidateTests(unittest.TestCase):
             self.assertTrue(ranked)
             self.assertTrue(ranked[0].subtitle_safe)
             self.assertLessEqual(abs(ranked[0].time_ms - (target + 25_000)), 500)
+
+
+class SemanticCutTests(unittest.TestCase):
+    def test_dialogue_edge_can_be_candidate_without_visual_cut(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "sample.srt"
+            path.write_text(SRT, encoding="utf-8")
+            track = SubtitleTrack.load(path)
+            target = 15 * 60_000
+            dialogue_points = track.dialogue_boundaries(target - 30_000, target + 30_000)
+            self.assertTrue(dialogue_points)
+            ranked = rank_candidates(
+                target,
+                30_000,
+                visual_points=[],
+                silence_points=[],
+                subtitles=track,
+                top_n=5,
+            )
+            self.assertTrue(any(x.dialogue_edge for x in ranked))
+
+    def test_frame_resolver_uses_real_pts_and_prefers_before_new_content(self):
+        frames = [9990, 10030, 10070, 10110, 10150]
+        with patch("minicut_agent.frame_resolver.probe_frame_timestamps", return_value=frames):
+            result = resolve_semantic_frame(
+                Path("movie.mp4"),
+                "ffprobe",
+                preferred_ms=10100,
+                zone_start_ms=10000,
+                zone_end_ms=10160,
+                subtitles=None,
+                prefer_before_ms=10120,
+            )
+        self.assertTrue(result["frame_verified"])
+        self.assertEqual(result["time_ms"], 10110)
+
+    def test_semantic_offset_is_clamped_to_clip(self):
+        self.assertEqual(_bounded_offset(999999, 0), 14000)
+        self.assertEqual(_bounded_offset(-999999, 0), -14000)
 
 
 if __name__ == "__main__":
