@@ -39,8 +39,11 @@ jobs:
         shell: pwsh
         run: |
           python -m compileall -q minicut_agent main.py mcp_server.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -c "from minicut_agent.ui import MiniCutWindow; print('ui-import-ok')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -c "import mcp_server; print('mcp-import-ok')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Unit tests
         shell: pwsh
