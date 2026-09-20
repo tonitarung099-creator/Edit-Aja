@@ -10,10 +10,10 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QSlider, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
-    QTabWidget, QVBoxLayout, QWidget
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QPlainTextEdit, QProgressBar, QPushButton, QSlider, QSpinBox, QSplitter,
+    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget
 )
 
 from . import APP_TITLE
@@ -24,6 +24,7 @@ from .core import (
     load_project_file, parse_time_ms
 )
 from .gemini import DEFAULT_MODEL
+from .gemini_keys import GeminiKeyStore, MAX_GEMINI_KEYS
 from .workers import AgentWorker, AnalyzeWorker, ExportWorker, FilmCutWorker, GeminiTestWorker
 
 
@@ -68,6 +69,12 @@ class MiniCutWindow(QMainWindow):
         self.film_cut_worker: FilmCutWorker | None = None
         self.film_cut_results: list[dict] = []
         self.srt_path: Path | None = None
+        self.gemini_keys = GeminiKeyStore()
+        self._gemini_test_key_id: str | None = None
+        self._film_active_key_id: str | None = None
+        self._film_active_model: str = DEFAULT_MODEL
+        self._film_usage_seen_requests = 0
+        self._film_usage_seen_prompt_tokens = 0
 
         self.bridge_queue: "queue.Queue[BridgeCall]" = queue.Queue()
         self.bridge_state: dict = self.model.state()
@@ -140,6 +147,7 @@ class MiniCutWindow(QMainWindow):
         self.tabs.addTab(self._parts_tab(), "Timeline Part")
         self.tabs.addTab(self._agent_tab(), "AI Agent")
         self.tabs.addTab(self._film_cut_tab(), "AI Film Cut")
+        self.tabs.addTab(self._gemini_keys_tab(), "Gemini API")
         self.tabs.addTab(self._log_tab(), "Log")
         splitter.addWidget(self.tabs)
         splitter.setSizes([820, 460])
@@ -276,16 +284,20 @@ class MiniCutWindow(QMainWindow):
         layout.addWidget(intro)
 
         form = QFormLayout()
-        self.gemini_key_edit = QLineEdit()
-        self.gemini_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.gemini_key_edit.setPlaceholderText("Tempel Gemini API key")
+        key_row = QWidget()
+        key_layout = QHBoxLayout(key_row)
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        self.gemini_key_combo = QComboBox()
+        self.gemini_manage_btn = QPushButton("Kelola API")
+        key_layout.addWidget(self.gemini_key_combo, 1)
+        key_layout.addWidget(self.gemini_manage_btn)
         self.gemini_model_combo = QComboBox()
         self.gemini_model_combo.addItems([
             DEFAULT_MODEL,
             "gemini-3.1-flash-lite",
             "gemini-2.5-flash-lite",
         ])
-        form.addRow("Gemini API key", self.gemini_key_edit)
+        form.addRow("API aktif", key_row)
         form.addRow("Model", self.gemini_model_combo)
 
         srt_row = QWidget()
@@ -341,10 +353,14 @@ class MiniCutWindow(QMainWindow):
         layout.addWidget(self.film_table, 1)
 
         self.srt_btn.clicked.connect(self._choose_srt)
+        self.gemini_manage_btn.clicked.connect(self._open_gemini_manager)
+        self.gemini_key_combo.currentIndexChanged.connect(self._film_key_changed)
+        self.gemini_model_combo.currentIndexChanged.connect(self._refresh_gemini_key_views)
         self.gemini_test_btn.clicked.connect(self._test_gemini)
         self.film_analyze_btn.clicked.connect(self._start_film_cut)
         self.film_cancel_btn.clicked.connect(self._cancel_film_cut)
         self.film_apply_btn.clicked.connect(self._apply_film_cut)
+        self._refresh_gemini_key_views()
         return w
 
     def _log_tab(self):
