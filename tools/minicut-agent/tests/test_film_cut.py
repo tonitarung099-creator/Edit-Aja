@@ -58,23 +58,23 @@ class CandidateTests(unittest.TestCase):
 
 
 class SemanticCutTests(unittest.TestCase):
-    def test_dialogue_edge_can_be_candidate_without_visual_cut(self):
+    def test_visual_change_outranks_plain_dialogue_gap(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "sample.srt"
             path.write_text(SRT, encoding="utf-8")
             track = SubtitleTrack.load(path)
             target = 15 * 60_000
-            dialogue_points = track.dialogue_boundaries(target - 30_000, target + 30_000)
-            self.assertTrue(dialogue_points)
             ranked = rank_candidates(
                 target,
-                30_000,
-                visual_points=[],
+                120_000,
+                visual_points=[target + 25_000],
                 silence_points=[],
                 subtitles=track,
-                top_n=5,
+                top_n=3,
             )
-            self.assertTrue(any(x.dialogue_edge for x in ranked))
+            self.assertTrue(ranked)
+            self.assertTrue(ranked[0].visual)
+            self.assertLessEqual(abs(ranked[0].time_ms - (target + 25_000)), 700)
 
     def test_frame_resolver_uses_real_pts_and_prefers_before_new_content(self):
         frames = [9990, 10030, 10070, 10110, 10150]
@@ -92,8 +92,8 @@ class SemanticCutTests(unittest.TestCase):
         self.assertEqual(result["time_ms"], 10110)
 
     def test_semantic_offset_is_clamped_to_clip(self):
-        self.assertEqual(_bounded_offset(999999, 0), 6000)
-        self.assertEqual(_bounded_offset(-999999, 0), -6000)
+        self.assertEqual(_bounded_offset(999999, 0), 1200)
+        self.assertEqual(_bounded_offset(-999999, 0), -1200)
 
 
 if __name__ == "__main__":
