@@ -281,9 +281,9 @@ class MiniCutWindow(QMainWindow):
         layout = QVBoxLayout(w)
 
         intro = QLabel(
-            "Semantic Cut: MiniCut mencari kandidat lokal, lalu Gemini melihat cuplikan pendek "
-            "dengan VIDEO + AUDIO untuk memahami batas cerita. Setelah itu MiniCut mengunci "
-            "hasil ke frame PTS nyata. Film penuh tidak dikirim ke Gemini."
+            "Mode hemat + frame-accurate: MiniCut mencari kandidat lokal, lalu Gemini melihat "
+            "5 frame kecil per kandidat + SRT. Tidak ada video/audio yang dikirim. Setelah "
+            "itu MiniCut mengunci hasil ke frame PTS nyata dan SmartCut mengekspornya."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -968,9 +968,9 @@ class MiniCutWindow(QMainWindow):
         self.film_cut_worker.failed.connect(self._film_cut_failed)
         self.film_cut_worker.cancelled.connect(self._film_cut_cancelled)
         self.film_status_label.setText(
-            "Semantic Cut dimulai: kandidat lokal → video+audio Gemini → frame resolver."
+            "Analisis hemat dimulai: kandidat lokal → frame+SRT Gemini → frame resolver."
         )
-        self._log("Semantic Cut: kandidat lokal → Gemini video+audio → frame PTS nyata.")
+        self._log("AI Film Cut hemat: kandidat lokal → Gemini frame+SRT → frame PTS nyata.")
         self.film_cut_worker.start()
 
     def _film_cut_progress(self, index: int, total: int, stage: str):
