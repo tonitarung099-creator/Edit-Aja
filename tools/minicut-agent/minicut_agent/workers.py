@@ -7,7 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from .candidates import find_candidates_for_target, target_times
-from .core import export_segments, probe_keyframes, probe_media
+from .core import export_segments, export_segments_smartcut, probe_keyframes, probe_media
 from .gemini import GeminiClient
 from .frame_resolver import resolve_semantic_frame
 from .subtitles import SubtitleTrack, format_ms
@@ -36,7 +36,7 @@ class ExportWorker(QThread):
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, ffmpeg: str, source: Path, output_dir: Path, base_name: str, cuts: list[int], duration_ms: int):
+    def __init__(self, ffmpeg: str, source: Path, output_dir: Path, base_name: str, cuts: list[int], duration_ms: int, mode: str = "fast", smartcut_exe: str | None = None):
         super().__init__()
         self.ffmpeg = ffmpeg
         self.source = source
@@ -44,6 +44,8 @@ class ExportWorker(QThread):
         self.base_name = base_name
         self.cuts = list(cuts)
         self.duration_ms = duration_ms
+        self.mode = mode
+        self.smartcut_exe = smartcut_exe
         self._cancel = False
 
     def cancel(self):
@@ -52,17 +54,32 @@ class ExportWorker(QThread):
     def run(self):
         started = time.time()
         try:
-            count, size = export_segments(
-                self.ffmpeg,
-                self.source,
-                self.output_dir,
-                self.base_name,
-                self.cuts,
-                self.duration_ms,
-                progress=lambda p, t: self.progress_changed.emit(p, t),
-                log=lambda s: self.log_line.emit(s),
-                cancelled=lambda: self._cancel,
-            )
+            if self.mode == "smartcut":
+                if not self.smartcut_exe:
+                    raise RuntimeError("MiniCut SmartCut tidak ditemukan.")
+                count, size = export_segments_smartcut(
+                    self.smartcut_exe,
+                    self.source,
+                    self.output_dir,
+                    self.base_name,
+                    self.cuts,
+                    self.duration_ms,
+                    progress=lambda p, t: self.progress_changed.emit(p, t),
+                    log=lambda s: self.log_line.emit(s),
+                    cancelled=lambda: self._cancel,
+                )
+            else:
+                count, size = export_segments(
+                    self.ffmpeg,
+                    self.source,
+                    self.output_dir,
+                    self.base_name,
+                    self.cuts,
+                    self.duration_ms,
+                    progress=lambda p, t: self.progress_changed.emit(p, t),
+                    log=lambda s: self.log_line.emit(s),
+                    cancelled=lambda: self._cancel,
+                )
             self.done.emit(str(self.output_dir), count, size, time.time() - started)
         except InterruptedError:
             self.cancelled.emit()
