@@ -540,6 +540,165 @@ class MiniCutWindow(QMainWindow):
         self._refresh()
         self._start_preview_proxy(source, metadata)
 
+
+    # ---------- preview proxy / smooth playback ----------
+    def _current_playback_rate(self) -> float:
+        if not hasattr(self, "speed_combo"):
+            return 1.0
+        try:
+            return float(self.speed_combo.currentData() or 1.0)
+        except Exception:
+            return 1.0
+
+    def _switch_player_media(self, path: Path, resume: bool | None = None):
+        path = Path(path).resolve()
+        if self._player_media_path == path:
+            self.player.setPlaybackRate(self._current_playback_rate())
+            return
+        if resume is None:
+            resume = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        self._pending_player_position = int(self.model.playhead_ms)
+        self._pending_player_resume = bool(resume)
+        self.player.pause()
+        self._player_media_path = path
+        self.player.setSource(QUrl.fromLocalFile(str(path)))
+        self.player.setPlaybackRate(self._current_playback_rate())
+        # Some Windows backends load quickly enough that the status signal can
+        # arrive before the event loop returns. This fallback is harmless.
+        QTimer.singleShot(250, self._apply_pending_player_state)
+
+    def _apply_pending_player_state(self):
+        if self._pending_player_position is None:
+            return
+        pos = int(self._pending_player_position)
+        resume = bool(self._pending_player_resume)
+        self._pending_player_position = None
+        self._pending_player_resume = False
+        self.player.setPosition(pos)
+        self.player.setPlaybackRate(self._current_playback_rate())
+        if resume:
+            self.player.play()
+
+    def _media_status_changed(self, status):
+        if status in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        ):
+            self._apply_pending_player_state()
+
+    def _start_preview_proxy(self, source: Path, metadata: dict):
+        ffmpeg = find_tool("ffmpeg")
+        if not ffmpeg:
+            self.proxy_status_label.setText("Proxy: FFmpeg tidak ada · Original")
+            return
+        try:
+            path = preview_proxy_path(source)
+        except Exception as exc:
+            self.proxy_status_label.setText("Proxy: cache gagal · Original")
+            self._log("Proxy cache: " + str(exc))
+            return
+
+        if path.is_file() and path.stat().st_size > 64 * 1024:
+            self.preview_proxy = path
+            self.proxy_status_label.setText("Proxy: siap")
+            if self.preview_combo.currentData() == "proxy":
+                self._switch_player_media(path)
+            return
+
+        self.preview_proxy = None
+        self.proxy_status_label.setText("Proxy: membuat 0%")
+        self.proxy_worker = ProxyWorker(
+            ffmpeg=ffmpeg,
+            source=source.resolve(),
+            output=path,
+            duration_ms=self.model.duration_ms,
+            source_height=int(metadata.get("height") or 0),
+            fps=float(metadata.get("fps") or 0.0),
+        )
+        self.proxy_worker.progress_changed.connect(self._proxy_progress)
+        self.proxy_worker.log_line.connect(lambda s: self._log("Proxy: " + s))
+        self.proxy_worker.ready.connect(self._proxy_ready)
+        self.proxy_worker.failed.connect(self._proxy_failed)
+        self.proxy_worker.cancelled.connect(self._proxy_cancelled)
+        self.proxy_worker.start()
+
+    def _proxy_progress(self, pct: int, _text: str):
+        self.proxy_status_label.setText(f"Proxy: membuat {pct}%")
+
+    def _proxy_ready(self, path: str):
+        worker = self.proxy_worker
+        self.proxy_worker = None
+        if not self.model.source:
+            return
+        if worker and worker.source.resolve() != self.model.source.resolve():
+            return
+        self.preview_proxy = Path(path).resolve()
+        self.proxy_status_label.setText("Proxy: siap")
+        self._log("Proxy preview siap: " + str(self.preview_proxy))
+        if self.preview_combo.currentData() == "proxy":
+            self._switch_player_media(self.preview_proxy)
+
+    def _proxy_failed(self, message: str):
+        self.proxy_worker = None
+        self.preview_proxy = None
+        self.proxy_status_label.setText("Proxy: gagal · Original")
+        self._log("Proxy preview gagal, tetap memakai original: " + message)
+
+    def _proxy_cancelled(self):
+        self.proxy_worker = None
+        if self.model.source:
+            self.proxy_status_label.setText("Proxy: dibatalkan · Original")
+
+    def _preview_mode_changed(self):
+        if not self.model.source:
+            return
+        if self.preview_combo.currentData() == "original":
+            self._switch_player_media(self.model.source)
+            self.proxy_status_label.setText(
+                "Proxy: siap · tidak dipakai" if self.preview_proxy else "Proxy: Original"
+            )
+            return
+        if self.preview_proxy and self.preview_proxy.is_file():
+            self.proxy_status_label.setText("Proxy: siap")
+            self._switch_player_media(self.preview_proxy)
+        else:
+            self.proxy_status_label.setText(
+                "Proxy: sedang dibuat · sementara Original"
+                if self.proxy_worker and self.proxy_worker.isRunning()
+                else "Proxy: belum siap · Original"
+            )
+            self._switch_player_media(self.model.source)
+
+    def _playback_rate_changed(self):
+        rate = self._current_playback_rate()
+        self.player.setPlaybackRate(rate)
+        self._log(f"Playback speed: {rate:g}x")
+
+    def _load_frame_pts_window(self, center_ms: int, radius_ms: int = 2500) -> list[int]:
+        if not self.model.source:
+            return []
+        center_ms = self.model.clamp(center_ms)
+        if (
+            self._frame_pts_cache
+            and self._frame_pts_cache_start + 300 <= center_ms <= self._frame_pts_cache_end - 300
+        ):
+            return self._frame_pts_cache
+        ffprobe = find_tool("ffprobe")
+        if not ffprobe:
+            return []
+        start_ms = max(0, center_ms - radius_ms)
+        end_ms = min(self.model.duration_ms, center_ms + radius_ms)
+        points = probe_frame_timestamps(
+            self.model.source,
+            ffprobe,
+            start_ms,
+            max(start_ms + 100, end_ms),
+        )
+        self._frame_pts_cache = points
+        self._frame_pts_cache_start = start_ms
+        self._frame_pts_cache_end = end_ms
+        return points
+
     def _analysis_failed(self, message: str):
         self.pending_load = None
         self.analyze_worker = None
@@ -575,9 +734,39 @@ class MiniCutWindow(QMainWindow):
             self.player.play()
 
     def _step_frame(self, direction: int):
+        if not self.model.source:
+            return
+        self.player.pause()
+        current = int(self.model.playhead_ms)
+        try:
+            points = self._load_frame_pts_window(current)
+            if direction > 0:
+                pos = bisect.bisect_right(points, current + 1)
+                target = points[pos] if pos < len(points) else None
+            else:
+                pos = bisect.bisect_left(points, current - 1) - 1
+                target = points[pos] if pos >= 0 else None
+
+            if target is None:
+                # Refresh with a wider window when stepping across cache edge.
+                self._frame_pts_cache = []
+                points = self._load_frame_pts_window(current, radius_ms=10_000)
+                if direction > 0:
+                    pos = bisect.bisect_right(points, current + 1)
+                    target = points[pos] if pos < len(points) else None
+                else:
+                    pos = bisect.bisect_left(points, current - 1) - 1
+                    target = points[pos] if pos >= 0 else None
+
+            if target is not None:
+                self.tool_seek(int(target))
+                return
+        except Exception as exc:
+            self._log("Frame step PTS fallback: " + str(exc))
+
         fps = self.model.fps if self.model.fps > 0 else 25.0
         step = max(1, round(1000 / fps))
-        self.tool_seek(self.model.playhead_ms + direction * step)
+        self.tool_seek(current + direction * step)
 
     # ---------- manual operations ----------
     def _snapshot(self) -> list[CutPoint]:
