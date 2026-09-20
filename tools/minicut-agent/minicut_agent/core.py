@@ -363,7 +363,7 @@ def preview_proxy_path(source: Path) -> Path:
     """
     source = source.resolve()
     stat = source.stat()
-    identity = f"{source}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8", errors="replace")
+    identity = f"preview-v1|{source}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8", errors="replace")
     token = hashlib.sha1(identity).hexdigest()[:20]
     base_env = os.environ.get("LOCALAPPDATA")
     if base_env:
@@ -405,6 +405,8 @@ def build_preview_proxy(
     ]
     if int(source_height or 0) > 720:
         cmd += ["-vf", "scale=-2:720"]
+    else:
+        cmd += ["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
     cmd += [
         "-c:v", "libx264",
         "-preset", "veryfast",
