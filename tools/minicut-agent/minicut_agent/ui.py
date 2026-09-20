@@ -615,22 +615,27 @@ class MiniCutWindow(QMainWindow):
             source_height=int(metadata.get("height") or 0),
             fps=float(metadata.get("fps") or 0.0),
         )
-        self.proxy_worker.progress_changed.connect(self._proxy_progress)
-        self.proxy_worker.log_line.connect(lambda s: self._log("Proxy: " + s))
-        self.proxy_worker.ready.connect(self._proxy_ready)
-        self.proxy_worker.failed.connect(self._proxy_failed)
-        self.proxy_worker.cancelled.connect(self._proxy_cancelled)
-        self.proxy_worker.start()
-
-    def _proxy_progress(self, pct: int, _text: str):
-        self.proxy_status_label.setText(f"Proxy: membuat {pct}%")
-
-    def _proxy_ready(self, path: str):
         worker = self.proxy_worker
-        self.proxy_worker = None
-        if not self.model.source:
+        worker.progress_changed.connect(lambda p, t, w=worker: self._proxy_progress(w, p, t))
+        worker.log_line.connect(lambda s, w=worker: self._proxy_log(w, s))
+        worker.ready.connect(lambda p, w=worker: self._proxy_ready(w, p))
+        worker.failed.connect(lambda m, w=worker: self._proxy_failed(w, m))
+        worker.cancelled.connect(lambda w=worker: self._proxy_cancelled(w))
+        worker.start()
+
+    def _proxy_progress(self, worker: ProxyWorker, pct: int, _text: str):
+        if self.proxy_worker is worker:
+            self.proxy_status_label.setText(f"Proxy: membuat {pct}%")
+
+    def _proxy_log(self, worker: ProxyWorker, text: str):
+        if self.proxy_worker is worker:
+            self._log("Proxy: " + text)
+
+    def _proxy_ready(self, worker: ProxyWorker, path: str):
+        if self.proxy_worker is not worker:
             return
-        if worker and worker.source.resolve() != self.model.source.resolve():
+        self.proxy_worker = None
+        if not self.model.source or worker.source.resolve() != self.model.source.resolve():
             return
         self.preview_proxy = Path(path).resolve()
         self.proxy_status_label.setText("Proxy: siap")
@@ -638,18 +643,22 @@ class MiniCutWindow(QMainWindow):
         if self.preview_combo.currentData() == "proxy":
             self._switch_player_media(self.preview_proxy)
 
-    def _proxy_failed(self, message: str):
+    def _proxy_failed(self, worker: ProxyWorker, message: str):
+        if self.proxy_worker is not worker:
+            return
         self.proxy_worker = None
         self.preview_proxy = None
         self.proxy_status_label.setText("Proxy: gagal · Original")
         self._log("Proxy preview gagal, tetap memakai original: " + message)
 
-    def _proxy_cancelled(self):
+    def _proxy_cancelled(self, worker: ProxyWorker):
+        if self.proxy_worker is not worker:
+            return
         self.proxy_worker = None
         if self.model.source:
             self.proxy_status_label.setText("Proxy: dibatalkan · Original")
 
-    def _preview_mode_changed(self):
+    def _preview_mode_changed(self, *_):
         if not self.model.source:
             return
         if self.preview_combo.currentData() == "original":
@@ -669,7 +678,7 @@ class MiniCutWindow(QMainWindow):
             )
             self._switch_player_media(self.model.source)
 
-    def _playback_rate_changed(self):
+    def _playback_rate_changed(self, *_):
         rate = self._current_playback_rate()
         self.player.setPlaybackRate(rate)
         self._log(f"Playback speed: {rate:g}x")
@@ -1591,6 +1600,9 @@ class MiniCutWindow(QMainWindow):
             self._begin_load(path)
 
     def closeEvent(self, event):
+        if self.proxy_worker and self.proxy_worker.isRunning():
+            self.proxy_worker.cancel()
+            self.proxy_worker.wait(5000)
         if self.film_cut_worker and self.film_cut_worker.isRunning():
             answer = QMessageBox.question(self, APP_TITLE, "AI Film Cut masih berjalan. Tetap keluar?")
             if answer != QMessageBox.StandardButton.Yes:
