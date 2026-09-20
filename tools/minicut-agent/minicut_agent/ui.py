@@ -363,6 +363,58 @@ class MiniCutWindow(QMainWindow):
         self._refresh_gemini_key_views()
         return w
 
+
+    def _gemini_keys_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        intro = QLabel(
+            "Simpan hingga 100 Gemini API key. Key disimpan terenkripsi dengan Windows DPAPI. "
+            "Persentase RPM/TPM/RPD adalah pemakaian yang dicatat MiniCut, bukan dashboard Google penuh."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.gemini_key_count_label = QLabel()
+        layout.addWidget(self.gemini_key_count_label)
+
+        self.gemini_keys_table = QTableWidget(0, 8)
+        self.gemini_keys_table.setHorizontalHeaderLabels([
+            "Aktif", "Nama", "Project", "API key", "Status", "RPM", "TPM", "RPD"
+        ])
+        self.gemini_keys_table.horizontalHeader().setStretchLastSection(True)
+        self.gemini_keys_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.gemini_keys_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        layout.addWidget(self.gemini_keys_table, 1)
+
+        actions = QHBoxLayout()
+        self.gemini_add_key_btn = QPushButton("+ Tambah API")
+        self.gemini_edit_key_btn = QPushButton("Edit")
+        self.gemini_remove_key_btn = QPushButton("Hapus")
+        self.gemini_activate_key_btn = QPushButton("Jadikan Aktif")
+        self.gemini_test_selected_btn = QPushButton("Tes Terpilih")
+        actions.addWidget(self.gemini_add_key_btn)
+        actions.addWidget(self.gemini_edit_key_btn)
+        actions.addWidget(self.gemini_remove_key_btn)
+        actions.addWidget(self.gemini_activate_key_btn)
+        actions.addWidget(self.gemini_test_selected_btn)
+        layout.addLayout(actions)
+
+        self.gemini_manager_note = QLabel(
+            "Status hijau = request tes terakhir berhasil. Merah LIMIT = Google mengembalikan limit/quota. "
+            "MiniCut tidak memindahkan key secara otomatis saat kuota habis."
+        )
+        self.gemini_manager_note.setWordWrap(True)
+        layout.addWidget(self.gemini_manager_note)
+
+        self.gemini_add_key_btn.clicked.connect(self._add_gemini_key)
+        self.gemini_edit_key_btn.clicked.connect(self._edit_gemini_key)
+        self.gemini_remove_key_btn.clicked.connect(self._remove_gemini_key)
+        self.gemini_activate_key_btn.clicked.connect(self._activate_selected_gemini_key)
+        self.gemini_test_selected_btn.clicked.connect(self._test_selected_gemini_key)
+        self._refresh_gemini_key_views()
+        return w
+
     def _log_tab(self):
         w = QWidget()
         layout = QVBoxLayout(w)
