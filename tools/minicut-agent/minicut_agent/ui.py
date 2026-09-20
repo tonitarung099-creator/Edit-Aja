@@ -63,6 +63,10 @@ class MiniCutWindow(QMainWindow):
         self.analyze_worker: AnalyzeWorker | None = None
         self.export_worker: ExportWorker | None = None
         self.agent_worker: AgentWorker | None = None
+        self.gemini_test_worker: GeminiTestWorker | None = None
+        self.film_cut_worker: FilmCutWorker | None = None
+        self.film_cut_results: list[dict] = []
+        self.srt_path: Path | None = None
 
         self.bridge_queue: "queue.Queue[BridgeCall]" = queue.Queue()
         self.bridge_state: dict = self.model.state()
@@ -134,6 +138,7 @@ class MiniCutWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._parts_tab(), "Timeline Part")
         self.tabs.addTab(self._agent_tab(), "AI Agent")
+        self.tabs.addTab(self._film_cut_tab(), "AI Film Cut")
         self.tabs.addTab(self._log_tab(), "Log")
         splitter.addWidget(self.tabs)
         splitter.setSizes([820, 460])
@@ -257,6 +262,90 @@ class MiniCutWindow(QMainWindow):
         self._agent_mode_changed()
         return w
 
+
+    def _film_cut_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        intro = QLabel(
+            "Mode hemat API: MiniCut mencari kandidat lokal dari visual + audio + SRT. "
+            "Gemini hanya menerima frame kecil di sekitar kandidat, bukan film penuh."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.gemini_key_edit = QLineEdit()
+        self.gemini_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.gemini_key_edit.setPlaceholderText("Tempel Gemini API key")
+        self.gemini_model_combo = QComboBox()
+        self.gemini_model_combo.addItems([
+            DEFAULT_MODEL,
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash-lite",
+        ])
+        form.addRow("Gemini API key", self.gemini_key_edit)
+        form.addRow("Model", self.gemini_model_combo)
+
+        srt_row = QWidget()
+        srt_layout = QHBoxLayout(srt_row)
+        srt_layout.setContentsMargins(0, 0, 0, 0)
+        self.srt_edit = QLineEdit()
+        self.srt_edit.setReadOnly(True)
+        self.srt_edit.setPlaceholderText("Belum ada SRT")
+        self.srt_btn = QPushButton("Pilih SRT")
+        srt_layout.addWidget(self.srt_edit, 1)
+        srt_layout.addWidget(self.srt_btn)
+        form.addRow("Subtitle", srt_row)
+
+        self.film_interval = QSpinBox()
+        self.film_interval.setRange(5, 60)
+        self.film_interval.setValue(15)
+        self.film_interval.setSuffix(" menit")
+        self.film_window = QSpinBox()
+        self.film_window.setRange(1, 5)
+        self.film_window.setValue(2)
+        self.film_window.setSuffix(" menit")
+        self.film_cache = QCheckBox("Simpan hasil parsial agar bisa dilanjutkan")
+        self.film_cache.setChecked(True)
+        form.addRow("Target part", self.film_interval)
+        form.addRow("Cari sekitar target", self.film_window)
+        form.addRow("Resume", self.film_cache)
+        layout.addLayout(form)
+
+        actions = QHBoxLayout()
+        self.gemini_test_btn = QPushButton("Tes API")
+        self.film_analyze_btn = QPushButton("Analisis Film")
+        self.film_cancel_btn = QPushButton("Batalkan")
+        self.film_apply_btn = QPushButton("Terapkan Semua Cut")
+        self.film_cancel_btn.setEnabled(False)
+        self.film_apply_btn.setEnabled(False)
+        actions.addWidget(self.gemini_test_btn)
+        actions.addWidget(self.film_analyze_btn)
+        actions.addWidget(self.film_cancel_btn)
+        actions.addWidget(self.film_apply_btn)
+        layout.addLayout(actions)
+
+        self.film_status_label = QLabel("Siap. Buka video, pilih SRT, lalu isi API Gemini.")
+        self.film_status_label.setWordWrap(True)
+        self.film_usage_label = QLabel("Pemakaian sesi: 0 request · 0 token")
+        layout.addWidget(self.film_status_label)
+        layout.addWidget(self.film_usage_label)
+
+        self.film_table = QTableWidget(0, 5)
+        self.film_table.setHorizontalHeaderLabels(
+            ["Target", "Cut terpilih", "Confidence", "Status", "Alasan"]
+        )
+        self.film_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.film_table, 1)
+
+        self.srt_btn.clicked.connect(self._choose_srt)
+        self.gemini_test_btn.clicked.connect(self._test_gemini)
+        self.film_analyze_btn.clicked.connect(self._start_film_cut)
+        self.film_cancel_btn.clicked.connect(self._cancel_film_cut)
+        self.film_apply_btn.clicked.connect(self._apply_film_cut)
+        return w
+
     def _log_tab(self):
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -331,6 +420,10 @@ class MiniCutWindow(QMainWindow):
         self.player.setSource(QUrl.fromLocalFile(str(source)))
         self.timeline.setRange(0, max(0, self.model.duration_ms))
         self.undo_stack.clear()
+        self.film_cut_results = []
+        if hasattr(self, 'film_table'):
+            self.film_table.setRowCount(0)
+            self.film_apply_btn.setEnabled(False)
         self.pending_load = None
         self.analyze_worker = None
         self.progress.setRange(0, 100)
@@ -467,6 +560,228 @@ class MiniCutWindow(QMainWindow):
             self._refresh()
         except Exception as exc:
             QMessageBox.critical(self, APP_TITLE, "Agent berhenti karena error:\n" + str(exc))
+
+
+    # ---------- AI Film Cut / Gemini ----------
+    def _choose_srt(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Pilih subtitle SRT", "", "Subtitle (*.srt)")
+        if path:
+            self.srt_path = Path(path).resolve()
+            self.srt_edit.setText(str(self.srt_path))
+            self.film_status_label.setText("SRT siap. MiniCut akan menggunakannya untuk verifikasi dialog.")
+
+    def _test_gemini(self):
+        key = self.gemini_key_edit.text().strip()
+        if not key:
+            QMessageBox.warning(self, APP_TITLE, "Isi Gemini API key terlebih dahulu.")
+            return
+        self.gemini_test_btn.setEnabled(False)
+        self.film_status_label.setText("Menguji Gemini API…")
+        self.gemini_test_worker = GeminiTestWorker(
+            key, self.gemini_model_combo.currentText().strip()
+        )
+        self.gemini_test_worker.ready.connect(self._gemini_test_ready)
+        self.gemini_test_worker.failed.connect(self._gemini_test_failed)
+        self.gemini_test_worker.start()
+
+    def _gemini_test_ready(self, result: dict):
+        self.gemini_test_btn.setEnabled(True)
+        self.gemini_test_worker = None
+        usage = result.get("usage") or {}
+        self.film_usage_label.setText(
+            f"Pemakaian sesi tes: {usage.get('requests', 0)} request · "
+            f"{usage.get('total_tokens', 0)} token"
+        )
+        self.film_status_label.setText(
+            "Gemini terhubung · " + str(result.get("model") or "")
+        )
+
+    def _gemini_test_failed(self, message: str):
+        self.gemini_test_btn.setEnabled(True)
+        self.gemini_test_worker = None
+        self.film_status_label.setText("Tes Gemini gagal.")
+        QMessageBox.critical(self, APP_TITLE, "Gemini API gagal:\n" + message)
+
+    def _start_film_cut(self):
+        if not self.model.source:
+            QMessageBox.warning(self, APP_TITLE, "Buka video terlebih dahulu.")
+            return
+        if not self.srt_path or not self.srt_path.is_file():
+            QMessageBox.warning(self, APP_TITLE, "Pilih file SRT yang sesuai dengan film.")
+            return
+        key = self.gemini_key_edit.text().strip()
+        if not key:
+            QMessageBox.warning(self, APP_TITLE, "Isi Gemini API key.")
+            return
+        ffmpeg = find_tool("ffmpeg")
+        if not ffmpeg:
+            QMessageBox.critical(self, APP_TITLE, "FFmpeg tidak ditemukan.")
+            return
+        if self.film_cut_worker and self.film_cut_worker.isRunning():
+            return
+
+        self.film_cut_results = []
+        self.film_table.setRowCount(0)
+        self.film_apply_btn.setEnabled(False)
+        self.film_analyze_btn.setEnabled(False)
+        self.film_cancel_btn.setEnabled(True)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+
+        self.film_cut_worker = FilmCutWorker(
+            ffmpeg=ffmpeg,
+            source=self.model.source,
+            duration_ms=self.model.duration_ms,
+            srt_path=self.srt_path,
+            api_key=key,
+            model=self.gemini_model_combo.currentText().strip(),
+            interval_ms=self.film_interval.value() * 60_000,
+            window_ms=self.film_window.value() * 60_000,
+            top_n=3,
+            use_cache=self.film_cache.isChecked(),
+        )
+        self.film_cut_worker.progress_changed.connect(self._film_cut_progress)
+        self.film_cut_worker.target_result.connect(self._film_cut_target_result)
+        self.film_cut_worker.usage_changed.connect(self._film_cut_usage)
+        self.film_cut_worker.done.connect(self._film_cut_done)
+        self.film_cut_worker.failed.connect(self._film_cut_failed)
+        self.film_cut_worker.cancelled.connect(self._film_cut_cancelled)
+        self.film_status_label.setText("Analisis dimulai. Film penuh tetap di komputer.")
+        self._log("AI Film Cut dimulai: kandidat lokal → Gemini verifier.")
+        self.film_cut_worker.start()
+
+    def _film_cut_progress(self, index: int, total: int, stage: str):
+        pct = int(((index - 1) / max(1, total)) * 100)
+        self.progress.setValue(pct)
+        self.status.setText(f"AI Film Cut {index}/{total} · {stage}")
+        self.film_status_label.setText(f"Target {index}/{total} · {stage}")
+
+    def _film_cut_target_result(self, result: dict):
+        target_ms = int(result.get("target_ms") or 0)
+        existing = next(
+            (i for i, x in enumerate(self.film_cut_results)
+             if int(x.get("target_ms") or 0) == target_ms),
+            None,
+        )
+        if existing is None:
+            self.film_cut_results.append(dict(result))
+        else:
+            self.film_cut_results[existing] = dict(result)
+        self.film_cut_results.sort(key=lambda x: int(x.get("target_ms") or 0))
+
+        row = self.film_table.rowCount()
+        self.film_table.insertRow(row)
+        confidence = float(result.get("confidence") or 0)
+        review = bool(result.get("needs_review")) or confidence < 0.55
+        values = [
+            str(result.get("target") or clock_text(target_ms)),
+            str(result.get("selected_time") or clock_text(int(result.get("selected_time_ms") or 0))),
+            f"{confidence:.0%}",
+            "REVIEW" if review else ("CACHE" if result.get("cached") else "OK"),
+            str(result.get("reason") or ""),
+        ]
+        for col, value in enumerate(values):
+            self.film_table.setItem(row, col, QTableWidgetItem(value))
+
+        preview_marks = [int(x.get("selected_time_ms") or 0) for x in self.film_cut_results]
+        self.timeline.set_marks(preview_marks)
+
+    def _film_cut_usage(self, usage: dict):
+        self.film_usage_label.setText(
+            f"Pemakaian sesi: {usage.get('requests', 0)} request · "
+            f"{usage.get('prompt_tokens', 0)} input token · "
+            f"{usage.get('total_tokens', 0)} total token"
+        )
+
+    def _film_cut_done(self, results: list):
+        self.film_cut_worker = None
+        self.film_analyze_btn.setEnabled(True)
+        self.film_cancel_btn.setEnabled(False)
+        self.progress.setValue(100)
+        self.film_cut_results = sorted(
+            [dict(x) for x in results], key=lambda x: int(x.get("target_ms") or 0)
+        )
+        review_count = sum(
+            1 for x in self.film_cut_results
+            if bool(x.get("needs_review")) or float(x.get("confidence") or 0) < 0.55
+        )
+        self.film_apply_btn.setEnabled(bool(self.film_cut_results))
+        if review_count:
+            self.film_status_label.setText(
+                f"Selesai · {len(results)} titik · {review_count} perlu review sebelum diterapkan."
+            )
+        else:
+            self.film_status_label.setText(
+                f"Selesai · {len(results)} titik potong siap dipreview dan diterapkan."
+            )
+        self.status.setText("AI Film Cut selesai · belum diterapkan ke timeline.")
+        self._log(f"AI Film Cut selesai: {len(results)} titik.")
+
+    def _film_cut_failed(self, message: str):
+        self.film_cut_worker = None
+        self.film_analyze_btn.setEnabled(True)
+        self.film_cancel_btn.setEnabled(False)
+        self.status.setText("AI Film Cut gagal.")
+        self.film_status_label.setText("Analisis berhenti. Hasil yang sudah selesai disimpan di cache.")
+        QMessageBox.critical(self, APP_TITLE, "AI Film Cut gagal:\n" + message)
+
+    def _film_cut_cancelled(self):
+        self.film_cut_worker = None
+        self.film_analyze_btn.setEnabled(True)
+        self.film_cancel_btn.setEnabled(False)
+        self.status.setText("AI Film Cut dibatalkan.")
+        self.film_status_label.setText("Dibatalkan. Hasil sebelumnya tetap tersimpan di cache.")
+
+    def _cancel_film_cut(self):
+        if self.film_cut_worker and self.film_cut_worker.isRunning():
+            self.film_cut_worker.cancel()
+            self.film_cancel_btn.setEnabled(False)
+            self.film_status_label.setText("Membatalkan setelah langkah aktif selesai…")
+
+    def _apply_film_cut(self):
+        if not self.film_cut_results:
+            return
+        review_count = sum(
+            1 for x in self.film_cut_results
+            if bool(x.get("needs_review")) or float(x.get("confidence") or 0) < 0.55
+        )
+        if review_count:
+            answer = QMessageBox.question(
+                self,
+                APP_TITLE,
+                f"Ada {review_count} titik bertanda REVIEW. Tetap terapkan semua?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        if self.model.cuts:
+            answer = QMessageBox.question(
+                self,
+                APP_TITLE,
+                "Timeline sudah mempunyai cut. Ganti dengan hasil AI Film Cut?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        before = self._snapshot()
+        exact = []
+        for result in self.film_cut_results:
+            t = int(result.get("selected_time_ms") or 0)
+            if 0 < t < self.model.duration_ms:
+                exact.append(CutPoint(t, t))
+        exact.sort(key=lambda x: x.actual_ms)
+        if not exact:
+            QMessageBox.warning(self, APP_TITLE, "Tidak ada titik potong valid untuk diterapkan.")
+            return
+        self.undo_stack.append(before)
+        self.model.cuts = exact
+        self.model._normalize()
+        self.model.dirty = True
+        self._refresh()
+        self.film_apply_btn.setEnabled(False)
+        self.film_status_label.setText(
+            f"{len(exact)} titik AI diterapkan ke timeline. Timestamp dipertahankan presisi."
+        )
+        self._log(f"AI Film Cut diterapkan: {len(exact)} cut presisi.")
 
     # ---------- tool API ----------
     def tool_get_state(self):
@@ -655,6 +970,12 @@ class MiniCutWindow(QMainWindow):
             self._begin_load(path)
 
     def closeEvent(self, event):
+        if self.film_cut_worker and self.film_cut_worker.isRunning():
+            answer = QMessageBox.question(self, APP_TITLE, "AI Film Cut masih berjalan. Tetap keluar?")
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.film_cut_worker.cancel()
         if self.export_worker and self.export_worker.isRunning():
             answer = QMessageBox.question(self, APP_TITLE, "Ekspor masih berjalan. Tetap keluar?")
             if answer != QMessageBox.StandardButton.Yes:
