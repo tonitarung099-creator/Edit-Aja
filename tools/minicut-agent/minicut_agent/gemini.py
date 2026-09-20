@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
-import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -16,7 +15,11 @@ from .subtitles import SubtitleTrack, format_ms
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
-SEMANTIC_CLIP_RADIUS_MS = 14_000
+
+# Hemat token: Gemini hanya menerima gambar kecil + SRT, bukan video/audio.
+FRAME_OFFSETS_MS = (-3000, -800, 0, 800, 3000)
+FRAME_WIDTH = 448
+SEMANTIC_ZONE_LIMIT_MS = 6000
 
 
 @dataclass
@@ -35,7 +38,7 @@ class GeminiClient:
         if not self.api_key:
             raise ValueError("Gemini API key belum diisi.")
 
-    def _post(self, payload: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
+    def _post(self, payload: dict[str, Any], timeout: int = 90) -> dict[str, Any]:
         url = f"{API_ROOT}/models/{self.model}:generateContent"
         req = urllib.request.Request(
             url,
@@ -95,41 +98,45 @@ class GeminiClient:
         target_ms: int,
         candidates: list[LocalCandidate],
         subtitles: SubtitleTrack | None,
-        clip_radius_ms: int = SEMANTIC_CLIP_RADIUS_MS,
+        frame_width: int = FRAME_WIDTH,
     ) -> dict[str, Any]:
         if not candidates:
             raise ValueError("Tidak ada kandidat untuk diverifikasi Gemini.")
 
-        prompt = _semantic_prompt(target_ms, candidates, subtitles, clip_radius_ms)
+        prompt = _semantic_prompt(target_ms, candidates, subtitles)
         parts: list[dict[str, Any]] = [{"text": prompt}]
 
         for i, candidate in enumerate(candidates, 1):
-            clip = extract_context_clip_mp4(
-                ffmpeg,
-                source,
-                candidate.time_ms,
-                radius_ms=clip_radius_ms,
-            )
             parts.append({
                 "text": (
-                    f"KANDIDAT {i} · pusat kandidat {format_ms(candidate.time_ms)} · "
-                    f"cuplikan sekitar {clip_radius_ms / 1000:.0f} detik sebelum dan sesudah. "
-                    "Dengarkan AUDIO dan lihat VISUAL."
+                    f"KANDIDAT {i} · pusat {format_ms(candidate.time_ms)}. "
+                    "Urutan gambar berikut bergerak dari sebelum → sesudah kandidat. "
+                    "Tidak ada audio yang dikirim."
                 )
             })
-            parts.append({
-                "inline_data": {
-                    "mime_type": "video/mp4",
-                    "data": base64.b64encode(clip).decode("ascii"),
-                },
-                "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"},
-            })
+            for offset_ms in FRAME_OFFSETS_MS:
+                frame_ms = max(0, candidate.time_ms + offset_ms)
+                jpg = extract_frame_jpeg(ffmpeg, source, frame_ms, frame_width)
+                sign = "+" if offset_ms > 0 else ""
+                parts.append({
+                    "text": (
+                        f"Kandidat {i} · {sign}{offset_ms} ms · "
+                        f"timestamp {format_ms(frame_ms)}"
+                    )
+                })
+                parts.append({
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": base64.b64encode(jpg).decode("ascii"),
+                    },
+                    "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"},
+                })
 
         payload = {
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 1000,
+                "maxOutputTokens": 900,
                 "responseMimeType": "application/json",
             },
         }
@@ -148,8 +155,8 @@ class GeminiClient:
             raise RuntimeError("Gemini memilih kandidat di luar daftar.")
 
         selected = candidates[selected_index - 1]
-        start_off = _bounded_offset(result.get("boundary_start_offset_ms"), -2500)
-        end_off = _bounded_offset(result.get("boundary_end_offset_ms"), 2500)
+        start_off = _bounded_offset(result.get("boundary_start_offset_ms"), -900)
+        end_off = _bounded_offset(result.get("boundary_end_offset_ms"), 900)
         preferred_off = _bounded_offset(result.get("preferred_offset_ms"), 0)
         if start_off > end_off:
             start_off, end_off = end_off, start_off
@@ -157,7 +164,10 @@ class GeminiClient:
 
         new_content_off = result.get("new_content_starts_offset_ms")
         try:
-            new_content_off = _bounded_offset(new_content_off, None) if new_content_off is not None else None
+            new_content_off = (
+                _bounded_offset(new_content_off, None)
+                if new_content_off is not None else None
+            )
         except Exception:
             new_content_off = None
 
@@ -173,6 +183,8 @@ class GeminiClient:
         )
         result["target_ms"] = target_ms
         result["target"] = format_ms(target_ms)
+        result["analysis_mode"] = "frames+srt"
+        result["frames_per_candidate"] = len(FRAME_OFFSETS_MS)
         result["usage"] = self.usage.__dict__.copy()
         return result
 
@@ -188,55 +200,39 @@ def _bounded_offset(value: Any, default: int | None) -> int:
         if default is None:
             raise
         offset = default
-    return max(-SEMANTIC_CLIP_RADIUS_MS, min(SEMANTIC_CLIP_RADIUS_MS, offset))
+    return max(-SEMANTIC_ZONE_LIMIT_MS, min(SEMANTIC_ZONE_LIMIT_MS, offset))
 
 
-def extract_context_clip_mp4(
+def extract_frame_jpeg(
     ffmpeg: str,
     source: Path,
-    center_ms: int,
-    radius_ms: int = SEMANTIC_CLIP_RADIUS_MS,
-    width: int = 480,
+    time_ms: int,
+    width: int = FRAME_WIDTH,
 ) -> bytes:
-    radius_ms = max(4000, min(int(radius_ms), 20_000))
-    start_ms = max(0, int(center_ms) - radius_ms)
-    duration_ms = radius_ms * 2
-    with tempfile.TemporaryDirectory(prefix="minicut-semantic-") as td:
-        out = Path(td) / "context.mp4"
-        cmd = [
-            ffmpeg,
-            "-y",
-            "-hide_banner",
-            "-loglevel", "error",
-            "-ss", f"{start_ms / 1000:.3f}",
-            "-i", str(source),
-            "-t", f"{duration_ms / 1000:.3f}",
-            "-map", "0:v:0",
-            "-map", "0:a:0?",
-            "-vf", f"scale={max(320, int(width))}:-2,fps=12",
-            "-c:v", "mpeg4",
-            "-q:v", "8",
-            "-c:a", "aac",
-            "-b:a", "64k",
-            "-ac", "1",
-            "-ar", "24000",
-            "-movflags", "+faststart",
-            str(out),
-        ]
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=creation_flags(),
-            check=False,
-        )
-        if proc.returncode != 0 or not out.is_file():
-            err = proc.stderr.decode("utf-8", errors="replace")
-            raise RuntimeError(err.strip() or "Gagal membuat cuplikan semantic untuk Gemini.")
-        data = out.read_bytes()
-        if not data:
-            raise RuntimeError("Cuplikan semantic kosong.")
-        return data
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel", "error",
+        "-ss", f"{max(0, time_ms) / 1000:.3f}",
+        "-i", str(source),
+        "-frames:v", "1",
+        "-vf", f"scale={max(256, int(width))}:-2",
+        "-q:v", "6",
+        "-f", "image2pipe",
+        "-vcodec", "mjpeg",
+        "pipe:1",
+    ]
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creation_flags(),
+        check=False,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        err = proc.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(err.strip() or "Gagal mengambil frame untuk Gemini.")
+    return proc.stdout
 
 
 def _response_text(data: dict[str, Any]) -> str:
@@ -263,75 +259,73 @@ def _semantic_prompt(
     target_ms: int,
     candidates: list[LocalCandidate],
     subtitles: SubtitleTrack | None,
-    clip_radius_ms: int,
 ) -> str:
     rows = []
     for i, candidate in enumerate(candidates, 1):
         rows.append(
             f"{i}. pusat={format_ms(candidate.time_ms)} | "
             f"jarak target={candidate.distance_ms/1000:.1f}s | "
-            f"visual_change={candidate.visual} | silence={candidate.silence} | "
+            f"visual_change={candidate.visual} | silence_lokal={candidate.silence} | "
             f"subtitle_gap={candidate.subtitle_gap} | dialogue_edge={candidate.dialogue_edge} | "
             f"subtitle_safe={candidate.subtitle_safe}"
         )
         if subtitles:
             excerpt = subtitles.nearby_text(
-                candidate.time_ms, radius_ms=clip_radius_ms + 4000, max_chars=2200
+                candidate.time_ms,
+                radius_ms=12_000,
+                max_chars=1800,
             )
             rows.append("SRT sekitar kandidat:\n" + (excerpt or "(tidak ada subtitle)"))
 
     return f"""
-Tugas Anda adalah menentukan BATAS NARATIF film yang paling natural di sekitar patokan
-{format_ms(target_ms)}. Patokan sekitar 15 menit hanyalah referensi durasi part.
+Tugas: tentukan BATAS NARATIF film paling natural di sekitar target
+{format_ms(target_ms)}. Target sekitar 15 menit hanyalah referensi durasi part.
 
-JANGAN menganggap pergantian gambar, shot, angle kamera, atau keyframe sebagai titik potong wajib.
-Yang menentukan adalah kapan rangkaian cerita lama benar-benar selesai dan bagian berikutnya
-secara natural mulai.
+INPUT YANG ANDA TERIMA:
+- beberapa frame gambar bertimestamp sebelum/sesudah setiap kandidat;
+- SRT di sekitar kandidat;
+- petunjuk lokal visual, silence, subtitle gap, dan dialogue edge.
+TIDAK ADA AUDIO dan TIDAK ADA VIDEO yang dikirim. Jangan mengarang informasi audio
+yang tidak dapat dibuktikan dari SRT/data lokal.
 
-Anda mendapat beberapa cuplikan VIDEO DENGAN AUDIO. Untuk tiap kandidat:
-- dengarkan kapan dialog lama benar-benar selesai;
-- dengarkan apakah dialog/ambience scene baru masuk SEBELUM gambar berganti (J-cut);
-- cek apakah suara/dialog scene lama masih berlanjut SETELAH gambar berganti (L-cut);
-- jangan pisahkan pertanyaan dan jawaban;
-- jangan potong aksi, reaksi, sebab-akibat, atau kejadian yang masih satu rangkaian;
-- jangan potong di tengah kata/kalimat/subtitle;
-- pergantian lokasi/waktu/kejadian dapat menjadi petunjuk, bukan aturan mutlak;
-- pilih batas yang membuat akhir Part N terasa selesai dan awal Part N+1 terasa wajar.
+ATURAN UTAMA:
+- Pergantian gambar/shot/kamera BUKAN otomatis batas part.
+- Prioritaskan keutuhan scene, percakapan, aksi, reaksi, dan sebab-akibat.
+- Jangan memisahkan pertanyaan dan jawaban yang jelas masih satu percakapan.
+- Jangan potong di tengah subtitle/dialog yang tercatat.
+- Jika SRT menunjukkan dialog/isi baru mulai sebelum gambar berubah, batas BOLEH
+  berada sebelum dialog baru itu.
+- Jika gambar berubah tetapi subtitle/kejadian lama jelas masih berlanjut, jangan
+  otomatis memotong pada perubahan gambar.
+- Silence lokal hanyalah petunjuk, bukan kewajiban.
+- Pilih kandidat yang membuat akhir Part N terasa selesai dan Part N+1 terasa wajar.
 
-Jika dialog scene baru masuk lebih dulu daripada perubahan visual dan itu memang awal naratif
-scene berikutnya, batas boleh berada SEBELUM dialog baru tersebut.
-Jika gambar sudah berubah tetapi dialog/aksi lama masih berlanjut, batas boleh berada SETELAH
-pergantian gambar.
+Anda TIDAK perlu memilih keyframe atau frame encoding. Berikan ZONA BATAS sempit.
+MiniCut akan membaca PTS frame asli dan mengunci keputusan Anda ke frame nyata setelahnya.
 
-Jangan mencoba memilih frame encoding/keyframe. MiniCut akan mengunci keputusan Anda ke frame
-PTS nyata setelah Anda memberikan ZONA BATAS NARATIF.
+Semua offset di JSON dalam MILIDETIK relatif terhadap pusat kandidat:
+0 = pusat kandidat, negatif = sebelum, positif = sesudah.
+Gunakan zona sesempit mungkin yang masih masuk akal. Jangan keluar ±6000 ms.
 
-Semua offset di JSON adalah MILIDETIK relatif terhadap pusat kandidat terpilih:
-0 = tepat di pusat kandidat; negatif = sebelum; positif = sesudah.
-Cuplikan tiap kandidat mencakup kira-kira ±{clip_radius_ms} ms dari pusat.
-
-Kandidat lokal:
+Kandidat:
 {chr(10).join(rows)}
 
 Kembalikan HANYA JSON valid:
 {{
   "selected_candidate_index": 1,
-  "boundary_start_offset_ms": -800,
-  "boundary_end_offset_ms": 500,
-  "preferred_offset_ms": -120,
-  "new_content_starts_offset_ms": 200,
-  "cut_intent": "before_new_dialogue",
+  "boundary_start_offset_ms": -500,
+  "boundary_end_offset_ms": 400,
+  "preferred_offset_ms": -100,
+  "new_content_starts_offset_ms": 300,
+  "cut_intent": "before_new_dialogue|after_old_dialogue|scene_transition|action_complete|safe_gap|other",
   "confidence": 0.0,
   "dialogue_safe": true,
   "action_safe": true,
-  "j_or_l_cut": "j_cut|l_cut|none|unclear",
   "needs_review": false,
   "reason": "alasan singkat dalam Bahasa Indonesia"
 }}
 
-boundary_start/end = zona sempit yang secara naratif aman untuk cut.
-preferred_offset_ms = posisi ideal di dalam zona tersebut.
-new_content_starts_offset_ms = jika dapat dikenali, saat isi/dialog scene baru mulai; jika tidak
-jelas gunakan null.
-Jika tidak yakin, needs_review=true dan confidence rendah.
+Jika awal konten/dialog baru tidak dapat ditentukan dari SRT/frame, gunakan
+new_content_starts_offset_ms=null.
+Jika konteks gambar+SRT tidak cukup, set needs_review=true dan confidence lebih rendah.
 """.strip()
