@@ -349,3 +349,97 @@ def export_segments(
         raise RuntimeError(f"FFmpeg berhenti dengan kode {rc}.")
     files = sorted(output_dir.glob(f"{base_name}_Part-*{ext}"))
     return len(files) or len(cut_times_ms) + 1, sum(p.stat().st_size for p in files if p.is_file())
+
+
+def export_segments_smartcut(
+    smartcut_exe: str,
+    source: Path,
+    output_dir: Path,
+    base_name: str,
+    cut_times_ms: list[int],
+    duration_ms: int,
+    progress: Callable[[int, str], None] | None = None,
+    log: Callable[[str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> tuple[int, int]:
+    """Frame-accurate export using the SmartCut companion.
+
+    SmartCut minimally re-encodes around non-keyframe cut points and copies
+    the rest of the media whenever its codec/container permits it.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ext = source.suffix or ".mp4"
+    marks = [0] + sorted(
+        set(int(v) for v in cut_times_ms if 0 < int(v) < int(duration_ms))
+    ) + [int(duration_ms)]
+    ranges = [(marks[i], marks[i + 1]) for i in range(len(marks) - 1)]
+    created: list[Path] = []
+
+    for idx, (start_ms, end_ms) in enumerate(ranges, 1):
+        if cancelled and cancelled():
+            raise InterruptedError("Ekspor dibatalkan.")
+
+        out = output_dir / f"{base_name}_Part-{idx:02d}{ext}"
+        start_arg = "start" if start_ms <= 0 else f"{start_ms / 1000:.6f}"
+        end_arg = "end" if end_ms >= duration_ms else f"{end_ms / 1000:.6f}"
+        keep = f"{start_arg},{end_arg}"
+        if progress:
+            progress(
+                int((idx - 1) / max(1, len(ranges)) * 100),
+                f"SmartCut Part-{idx:02d} · {clock_text(start_ms)} → {clock_text(end_ms)}",
+            )
+        if log:
+            log(f"SmartCut Part-{idx:02d}: {keep}")
+
+        proc = subprocess.Popen(
+            [
+                smartcut_exe,
+                str(source),
+                str(out),
+                "--keep",
+                keep,
+                "--log-level",
+                "warning",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creation_flags(),
+        )
+        lines: list[str] = []
+        while True:
+            if cancelled and cancelled():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                raise InterruptedError("Ekspor dibatalkan.")
+            line = proc.stdout.readline() if proc.stdout else ""
+            if line:
+                clean = line.strip()
+                if clean:
+                    lines.append(clean)
+                    if log:
+                        log(clean)
+            if proc.poll() is not None:
+                break
+
+        if proc.returncode != 0:
+            tail = "\n".join(lines[-20:])
+            raise RuntimeError(
+                f"SmartCut gagal pada Part-{idx:02d} (kode {proc.returncode})."
+                + (f"\n{tail}" if tail else "")
+            )
+        if not out.is_file() or out.stat().st_size <= 0:
+            raise RuntimeError(f"SmartCut tidak menghasilkan Part-{idx:02d}.")
+        created.append(out)
+        if progress:
+            progress(
+                int(idx / max(1, len(ranges)) * 100),
+                f"SmartCut Part-{idx:02d} selesai",
+            )
+
+    return len(created), sum(p.stat().st_size for p in created)
