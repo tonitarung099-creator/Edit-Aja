@@ -1001,11 +1001,26 @@ class MiniCutWindow(QMainWindow):
         self.timeline.set_marks(preview_marks)
 
     def _film_cut_usage(self, usage: dict):
+        requests = int(usage.get("requests") or 0)
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        delta_requests = max(0, requests - self._film_usage_seen_requests)
+        delta_prompt_tokens = max(0, prompt_tokens - self._film_usage_seen_prompt_tokens)
+        if self._film_active_key_id and (delta_requests or delta_prompt_tokens):
+            self.gemini_keys.record_usage(
+                self._film_active_key_id,
+                self._film_active_model,
+                requests=delta_requests,
+                prompt_tokens=delta_prompt_tokens,
+                status="ready",
+            )
+        self._film_usage_seen_requests = requests
+        self._film_usage_seen_prompt_tokens = prompt_tokens
         self.film_usage_label.setText(
-            f"Pemakaian sesi: {usage.get('requests', 0)} request · "
-            f"{usage.get('prompt_tokens', 0)} input token · "
+            f"Pemakaian sesi: {requests} request · "
+            f"{prompt_tokens} input token · "
             f"{usage.get('total_tokens', 0)} total token"
         )
+        self._refresh_gemini_key_views()
 
     def _film_cut_done(self, results: list):
         self.film_cut_worker = None
@@ -1029,6 +1044,14 @@ class MiniCutWindow(QMainWindow):
                 f"Selesai · {len(results)} titik potong siap dipreview dan diterapkan."
             )
         self.status.setText("AI Film Cut selesai · belum diterapkan ke timeline.")
+        if self._film_active_key_id:
+            self.gemini_keys.record_usage(
+                self._film_active_key_id,
+                self._film_active_model,
+                status="ready",
+                checked=True,
+            )
+        self._refresh_gemini_key_views()
         self._log(f"AI Film Cut selesai: {len(results)} titik.")
 
     def _film_cut_failed(self, message: str):
@@ -1037,6 +1060,16 @@ class MiniCutWindow(QMainWindow):
         self.film_cancel_btn.setEnabled(False)
         self.status.setText("AI Film Cut gagal.")
         self.film_status_label.setText("Analisis berhenti. Hasil yang sudah selesai disimpan di cache.")
+        lower = message.lower()
+        if self._film_active_key_id and (
+            "gemini" in lower or "429" in lower or "quota" in lower or "rate limit" in lower
+        ):
+            self.gemini_keys.mark_error(
+                self._film_active_key_id,
+                self._film_active_model,
+                message,
+            )
+        self._refresh_gemini_key_views()
         QMessageBox.critical(self, APP_TITLE, "AI Film Cut gagal:\n" + message)
 
     def _film_cut_cancelled(self):
