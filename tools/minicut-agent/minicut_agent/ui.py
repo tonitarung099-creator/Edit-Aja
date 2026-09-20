@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QProgressBar, QPushButton, QSlider, QSpinBox, QSplitter,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget
@@ -339,7 +339,7 @@ class MiniCutWindow(QMainWindow):
         actions.addWidget(self.film_apply_btn)
         layout.addLayout(actions)
 
-        self.film_status_label = QLabel("Siap. Buka video, pilih SRT, lalu isi API Gemini.")
+        self.film_status_label = QLabel("Siap. Buka video, pilih SRT, lalu pilih Gemini API aktif.")
         self.film_status_label.setWordWrap(True)
         self.film_usage_label = QLabel("Pemakaian sesi: 0 request · 0 token")
         layout.addWidget(self.film_status_label)
@@ -383,8 +383,8 @@ class MiniCutWindow(QMainWindow):
             "Aktif", "Nama", "Project", "API key", "Status", "RPM", "TPM", "RPD"
         ])
         self.gemini_keys_table.horizontalHeader().setStretchLastSection(True)
-        self.gemini_keys_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.gemini_keys_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.gemini_keys_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.gemini_keys_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         layout.addWidget(self.gemini_keys_table, 1)
 
         actions = QHBoxLayout()
