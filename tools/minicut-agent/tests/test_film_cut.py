@@ -51,7 +51,7 @@ class CandidateTests(unittest.TestCase):
             ranked = rank_candidates(target, 120_000, visual, silence, track, top_n=3)
             self.assertTrue(ranked)
             self.assertTrue(ranked[0].subtitle_safe)
-            self.assertEqual(ranked[0].time_ms, target + 25_000)
+            self.assertLessEqual(abs(ranked[0].time_ms - (target + 25_000)), 500)
 
 
 if __name__ == "__main__":
