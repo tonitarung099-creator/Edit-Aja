@@ -88,7 +88,7 @@ def _unprotect_windows(data: bytes) -> bytes:
     finally:
         ctypes.windll.kernel32.LocalFree(out_blob.pbData)
         if description.value:
-            ctypes.windll.kernel32.LocalFree(description)
+            ctypes.windll.kernel32.LocalFree(ctypes.cast(description, ctypes.c_void_p))
 
 
 def _encrypt_text(text: str) -> str:
@@ -164,11 +164,13 @@ class GeminiKeyStore:
         active = self.data.get("active_id")
         result: list[GeminiKeySummary] = []
         for rec in self.data.get("keys") or []:
-            try:
-                key = self.get_secret(rec["id"])
-                masked = self.mask_key(key)
-            except Exception:
-                masked = "(tidak dapat dibuka)"
+            masked = str(rec.get("masked") or "")
+            if not masked:
+                try:
+                    key = self.get_secret(rec["id"])
+                    masked = self.mask_key(key)
+                except Exception:
+                    masked = "(tidak dapat dibuka)"
             result.append(GeminiKeySummary(
                 id=str(rec.get("id") or ""),
                 name=str(rec.get("name") or "Gemini API"),
@@ -203,6 +205,7 @@ class GeminiKeyStore:
             "name": (name.strip() or f"Gemini API {self.count() + 1}")[:80],
             "project": project.strip()[:120],
             "secret": _encrypt_text(api_key),
+            "masked": self.mask_key(api_key),
             "created_at": _now_iso(),
             "usage": {},
         }
@@ -217,7 +220,9 @@ class GeminiKeyStore:
         rec["name"] = (name.strip() or rec.get("name") or "Gemini API")[:80]
         rec["project"] = project.strip()[:120]
         if api_key is not None and api_key.strip():
-            rec["secret"] = _encrypt_text(api_key.strip())
+            clean_key = api_key.strip()
+            rec["secret"] = _encrypt_text(clean_key)
+            rec["masked"] = self.mask_key(clean_key)
         self.save()
 
     def remove(self, key_id: str):
