@@ -631,6 +631,227 @@ class MiniCutWindow(QMainWindow):
             QMessageBox.critical(self, APP_TITLE, "Agent berhenti karena error:\n" + str(exc))
 
 
+
+    # ---------- Gemini API manager ----------
+    def _current_gemini_model(self) -> str:
+        if hasattr(self, "gemini_model_combo"):
+            return self.gemini_model_combo.currentText().strip() or DEFAULT_MODEL
+        return DEFAULT_MODEL
+
+    def _refresh_gemini_key_views(self):
+        summaries = self.gemini_keys.summaries()
+        active_id = self.gemini_keys.active_id()
+        model = self._current_gemini_model()
+
+        if hasattr(self, "gemini_key_combo"):
+            self.gemini_key_combo.blockSignals(True)
+            self.gemini_key_combo.clear()
+            if summaries:
+                active_index = 0
+                for i, item in enumerate(summaries):
+                    label = item.name
+                    if item.project:
+                        label += f" · {item.project}"
+                    self.gemini_key_combo.addItem(label, item.id)
+                    if item.id == active_id:
+                        active_index = i
+                self.gemini_key_combo.setCurrentIndex(active_index)
+            else:
+                self.gemini_key_combo.addItem("Belum ada API key", None)
+            self.gemini_key_combo.blockSignals(False)
+
+        if hasattr(self, "gemini_key_count_label"):
+            self.gemini_key_count_label.setText(
+                f"Tersimpan: {len(summaries)} / {MAX_GEMINI_KEYS} API key · model status: {model}"
+            )
+
+        if hasattr(self, "gemini_keys_table"):
+            self.gemini_keys_table.setRowCount(len(summaries))
+            for row, item in enumerate(summaries):
+                snap = self.gemini_keys.snapshot(item.id, model)
+                status = snap.get("status", "unknown")
+                status_text = {
+                    "ready": "🟢 SIAP",
+                    "limited": "🔴 LIMIT",
+                    "error": "🟠 ERROR",
+                    "unknown": "⚪ BELUM DICEK",
+                }.get(status, status.upper())
+                values = [
+                    "●" if item.id == active_id else "",
+                    item.name,
+                    item.project or "-",
+                    item.masked_key,
+                    status_text,
+                    f"{snap['rpm_used']}/{snap['rpm_limit']} ({snap['rpm_pct']:.1f}%)",
+                    f"{snap['tpm_used']:,}/{snap['tpm_limit']:,} ({snap['tpm_pct']:.1f}%)",
+                    f"{snap['rpd_used']}/{snap['rpd_limit']} ({snap['rpd_pct']:.1f}%)",
+                ]
+                for col, value in enumerate(values):
+                    cell = QTableWidgetItem(str(value))
+                    if col == 0:
+                        cell.setData(Qt.ItemDataRole.UserRole, item.id)
+                    self.gemini_keys_table.setItem(row, col, cell)
+
+    def _selected_gemini_key_id(self) -> str | None:
+        if not hasattr(self, "gemini_keys_table"):
+            return None
+        row = self.gemini_keys_table.currentRow()
+        if row < 0:
+            return None
+        item = self.gemini_keys_table.item(row, 0)
+        if not item:
+            return None
+        value = item.data(Qt.ItemDataRole.UserRole)
+        return str(value) if value else None
+
+    def _film_key_changed(self, index: int):
+        if not hasattr(self, "gemini_key_combo"):
+            return
+        key_id = self.gemini_key_combo.itemData(index)
+        if key_id:
+            try:
+                self.gemini_keys.set_active(str(key_id))
+            except Exception as exc:
+                QMessageBox.warning(self, APP_TITLE, str(exc))
+        self._refresh_gemini_key_views()
+
+    def _open_gemini_manager(self):
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i) == "Gemini API":
+                self.tabs.setCurrentIndex(i)
+                break
+
+    def _gemini_key_dialog(self, key_id: str | None = None):
+        existing = None
+        if key_id:
+            existing = next((x for x in self.gemini_keys.summaries() if x.id == key_id), None)
+            if not existing:
+                QMessageBox.warning(self, APP_TITLE, "API key tidak ditemukan.")
+                return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Edit Gemini API" if existing else "Tambah Gemini API")
+        dialog.resize(520, 190)
+        form = QFormLayout(dialog)
+
+        name_edit = QLineEdit(existing.name if existing else "")
+        project_edit = QLineEdit(existing.project if existing else "")
+        key_edit = QLineEdit()
+        key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        key_edit.setPlaceholderText(
+            "Kosongkan jika tidak ingin mengganti key" if existing else "Tempel Gemini API key"
+        )
+
+        form.addRow("Nama", name_edit)
+        form.addRow("Project", project_edit)
+        form.addRow("API key", key_edit)
+
+        note = QLabel(
+            "API key disimpan terenkripsi untuk user Windows ini dan tidak dimasukkan ke proyek GitHub."
+        )
+        note.setWordWrap(True)
+        form.addRow(note)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            if existing:
+                self.gemini_keys.update(
+                    existing.id,
+                    name_edit.text(),
+                    project_edit.text(),
+                    key_edit.text() or None,
+                )
+            else:
+                self.gemini_keys.add(
+                    name_edit.text(),
+                    project_edit.text(),
+                    key_edit.text(),
+                )
+            self._refresh_gemini_key_views()
+        except Exception as exc:
+            QMessageBox.critical(self, APP_TITLE, str(exc))
+
+    def _add_gemini_key(self):
+        if self.gemini_keys.count() >= MAX_GEMINI_KEYS:
+            QMessageBox.information(
+                self, APP_TITLE, f"Batas {MAX_GEMINI_KEYS} API key sudah tercapai."
+            )
+            return
+        self._gemini_key_dialog()
+
+    def _edit_gemini_key(self):
+        key_id = self._selected_gemini_key_id()
+        if not key_id:
+            QMessageBox.information(self, APP_TITLE, "Pilih satu API key di tabel.")
+            return
+        self._gemini_key_dialog(key_id)
+
+    def _remove_gemini_key(self):
+        key_id = self._selected_gemini_key_id()
+        if not key_id:
+            QMessageBox.information(self, APP_TITLE, "Pilih satu API key di tabel.")
+            return
+        summary = next((x for x in self.gemini_keys.summaries() if x.id == key_id), None)
+        name = summary.name if summary else "API ini"
+        answer = QMessageBox.question(
+            self, APP_TITLE, f"Hapus {name} dari penyimpanan MiniCut?"
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.gemini_keys.remove(key_id)
+            self._refresh_gemini_key_views()
+        except Exception as exc:
+            QMessageBox.critical(self, APP_TITLE, str(exc))
+
+    def _activate_selected_gemini_key(self):
+        key_id = self._selected_gemini_key_id()
+        if not key_id:
+            QMessageBox.information(self, APP_TITLE, "Pilih satu API key di tabel.")
+            return
+        try:
+            self.gemini_keys.set_active(key_id)
+            self._refresh_gemini_key_views()
+        except Exception as exc:
+            QMessageBox.critical(self, APP_TITLE, str(exc))
+
+    def _begin_gemini_test(self, key_id: str):
+        if self.gemini_test_worker and self.gemini_test_worker.isRunning():
+            QMessageBox.information(self, APP_TITLE, "Tes API sedang berjalan.")
+            return
+        try:
+            key = self.gemini_keys.get_secret(key_id)
+        except Exception as exc:
+            QMessageBox.critical(self, APP_TITLE, str(exc))
+            return
+
+        model = self._current_gemini_model()
+        self._gemini_test_key_id = key_id
+        self.gemini_test_btn.setEnabled(False)
+        if hasattr(self, "gemini_test_selected_btn"):
+            self.gemini_test_selected_btn.setEnabled(False)
+        self.film_status_label.setText("Menguji Gemini API…")
+        self.gemini_test_worker = GeminiTestWorker(key, model)
+        self.gemini_test_worker.ready.connect(self._gemini_test_ready)
+        self.gemini_test_worker.failed.connect(self._gemini_test_failed)
+        self.gemini_test_worker.start()
+
+    def _test_selected_gemini_key(self):
+        key_id = self._selected_gemini_key_id()
+        if not key_id:
+            QMessageBox.information(self, APP_TITLE, "Pilih satu API key di tabel.")
+            return
+        self._begin_gemini_test(key_id)
+
     # ---------- AI Film Cut / Gemini ----------
     def _choose_srt(self):
         path, _ = QFileDialog.getOpenFileName(self, "Pilih subtitle SRT", "", "Subtitle (*.srt)")
