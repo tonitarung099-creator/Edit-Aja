@@ -42,9 +42,10 @@ def _protect_windows(data: bytes) -> bytes:
         ctypes.cast(in_buffer, ctypes.POINTER(ctypes.c_byte)),
     )
     out_blob = _DATA_BLOB()
+    description = ctypes.c_wchar_p("MiniCut Gemini API Key")
     ok = ctypes.windll.crypt32.CryptProtectData(
         ctypes.byref(in_blob),
-        "MiniCut Gemini API Key",
+        description,
         None,
         None,
         None,
@@ -86,6 +87,8 @@ def _unprotect_windows(data: bytes) -> bytes:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
     finally:
         ctypes.windll.kernel32.LocalFree(out_blob.pbData)
+        if description.value:
+            ctypes.windll.kernel32.LocalFree(description)
 
 
 def _encrypt_text(text: str) -> str:
