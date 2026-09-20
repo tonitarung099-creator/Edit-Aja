@@ -861,35 +861,49 @@ class MiniCutWindow(QMainWindow):
             self.film_status_label.setText("SRT siap. MiniCut akan menggunakannya untuk verifikasi dialog.")
 
     def _test_gemini(self):
-        key = self.gemini_key_edit.text().strip()
-        if not key:
-            QMessageBox.warning(self, APP_TITLE, "Isi Gemini API key terlebih dahulu.")
+        key_id = self.gemini_keys.active_id()
+        if not key_id:
+            QMessageBox.warning(self, APP_TITLE, "Tambahkan Gemini API key terlebih dahulu.")
+            self._open_gemini_manager()
             return
-        self.gemini_test_btn.setEnabled(False)
-        self.film_status_label.setText("Menguji Gemini API…")
-        self.gemini_test_worker = GeminiTestWorker(
-            key, self.gemini_model_combo.currentText().strip()
-        )
-        self.gemini_test_worker.ready.connect(self._gemini_test_ready)
-        self.gemini_test_worker.failed.connect(self._gemini_test_failed)
-        self.gemini_test_worker.start()
+        self._begin_gemini_test(key_id)
 
     def _gemini_test_ready(self, result: dict):
         self.gemini_test_btn.setEnabled(True)
+        if hasattr(self, "gemini_test_selected_btn"):
+            self.gemini_test_selected_btn.setEnabled(True)
         self.gemini_test_worker = None
         usage = result.get("usage") or {}
+        model = str(result.get("model") or self._current_gemini_model())
+        key_id = self._gemini_test_key_id
+        if key_id:
+            self.gemini_keys.record_usage(
+                key_id,
+                model,
+                requests=int(usage.get("requests") or 0),
+                prompt_tokens=int(usage.get("prompt_tokens") or 0),
+                status="ready",
+                checked=True,
+            )
+        self._gemini_test_key_id = None
         self.film_usage_label.setText(
-            f"Pemakaian sesi tes: {usage.get('requests', 0)} request · "
+            f"Tes API: {usage.get('requests', 0)} request · "
             f"{usage.get('total_tokens', 0)} token"
         )
-        self.film_status_label.setText(
-            "Gemini terhubung · " + str(result.get("model") or "")
-        )
+        self.film_status_label.setText("Gemini terhubung · " + model)
+        self._refresh_gemini_key_views()
 
     def _gemini_test_failed(self, message: str):
         self.gemini_test_btn.setEnabled(True)
+        if hasattr(self, "gemini_test_selected_btn"):
+            self.gemini_test_selected_btn.setEnabled(True)
         self.gemini_test_worker = None
+        key_id = self._gemini_test_key_id
+        if key_id:
+            self.gemini_keys.mark_error(key_id, self._current_gemini_model(), message)
+        self._gemini_test_key_id = None
         self.film_status_label.setText("Tes Gemini gagal.")
+        self._refresh_gemini_key_views()
         QMessageBox.critical(self, APP_TITLE, "Gemini API gagal:\n" + message)
 
     def _start_film_cut(self):
@@ -899,9 +913,15 @@ class MiniCutWindow(QMainWindow):
         if not self.srt_path or not self.srt_path.is_file():
             QMessageBox.warning(self, APP_TITLE, "Pilih file SRT yang sesuai dengan film.")
             return
-        key = self.gemini_key_edit.text().strip()
-        if not key:
-            QMessageBox.warning(self, APP_TITLE, "Isi Gemini API key.")
+        key_id = self.gemini_keys.active_id()
+        if not key_id:
+            QMessageBox.warning(self, APP_TITLE, "Tambahkan dan pilih Gemini API key terlebih dahulu.")
+            self._open_gemini_manager()
+            return
+        try:
+            key = self.gemini_keys.get_secret(key_id)
+        except Exception as exc:
+            QMessageBox.critical(self, APP_TITLE, str(exc))
             return
         ffmpeg = find_tool("ffmpeg")
         if not ffmpeg:
@@ -911,6 +931,10 @@ class MiniCutWindow(QMainWindow):
             return
 
         self.film_cut_results = []
+        self._film_active_key_id = key_id
+        self._film_active_model = self._current_gemini_model()
+        self._film_usage_seen_requests = 0
+        self._film_usage_seen_prompt_tokens = 0
         self.film_table.setRowCount(0)
         self.film_apply_btn.setEnabled(False)
         self.film_analyze_btn.setEnabled(False)
@@ -924,7 +948,7 @@ class MiniCutWindow(QMainWindow):
             duration_ms=self.model.duration_ms,
             srt_path=self.srt_path,
             api_key=key,
-            model=self.gemini_model_combo.currentText().strip(),
+            model=self._film_active_model,
             interval_ms=self.film_interval.value() * 60_000,
             window_ms=self.film_window.value() * 60_000,
             top_n=3,
