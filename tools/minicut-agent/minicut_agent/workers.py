@@ -177,7 +177,7 @@ class FilmCutWorker(QThread):
     failed = Signal(str)
     cancelled = Signal()
 
-    CACHE_VERSION = 3
+    CACHE_VERSION = 4
 
     def __init__(
         self,
@@ -283,7 +283,7 @@ class FilmCutWorker(QThread):
                     self.cancelled.emit()
                     return
 
-                self.progress_changed.emit(index, len(targets), "Gemini menilai frame + SRT")
+                self.progress_changed.emit(index, len(targets), "Gemini memilih perpindahan scene")
                 verdict = client.verify_candidates(
                     self.ffmpeg,
                     self.source,
