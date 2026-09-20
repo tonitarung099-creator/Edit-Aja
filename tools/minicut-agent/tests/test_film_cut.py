@@ -92,8 +92,8 @@ class SemanticCutTests(unittest.TestCase):
         self.assertEqual(result["time_ms"], 10110)
 
     def test_semantic_offset_is_clamped_to_clip(self):
-        self.assertEqual(_bounded_offset(999999, 0), 14000)
-        self.assertEqual(_bounded_offset(-999999, 0), -14000)
+        self.assertEqual(_bounded_offset(999999, 0), 6000)
+        self.assertEqual(_bounded_offset(-999999, 0), -6000)
 
 
 if __name__ == "__main__":
