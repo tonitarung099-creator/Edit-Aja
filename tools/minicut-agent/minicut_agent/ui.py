@@ -277,8 +277,9 @@ class MiniCutWindow(QMainWindow):
         layout = QVBoxLayout(w)
 
         intro = QLabel(
-            "Mode hemat API: MiniCut mencari kandidat lokal dari visual + audio + SRT. "
-            "Gemini hanya menerima frame kecil di sekitar kandidat, bukan film penuh."
+            "Semantic Cut: MiniCut mencari kandidat lokal, lalu Gemini melihat cuplikan pendek "
+            "dengan VIDEO + AUDIO untuk memahami batas cerita. Setelah itu MiniCut mengunci "
+            "hasil ke frame PTS nyata. Film penuh tidak dikirim ke Gemini."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -345,9 +346,9 @@ class MiniCutWindow(QMainWindow):
         layout.addWidget(self.film_status_label)
         layout.addWidget(self.film_usage_label)
 
-        self.film_table = QTableWidget(0, 5)
+        self.film_table = QTableWidget(0, 7)
         self.film_table.setHorizontalHeaderLabels(
-            ["Target", "Cut terpilih", "Confidence", "Status", "Alasan"]
+            ["Target", "Batas AI", "Frame final", "Intent", "Confidence", "Status", "Alasan"]
         )
         self.film_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.film_table, 1)
@@ -924,8 +925,9 @@ class MiniCutWindow(QMainWindow):
             QMessageBox.critical(self, APP_TITLE, str(exc))
             return
         ffmpeg = find_tool("ffmpeg")
-        if not ffmpeg:
-            QMessageBox.critical(self, APP_TITLE, "FFmpeg tidak ditemukan.")
+        ffprobe = find_tool("ffprobe")
+        if not ffmpeg or not ffprobe:
+            QMessageBox.critical(self, APP_TITLE, "FFmpeg/ffprobe tidak ditemukan.")
             return
         if self.film_cut_worker and self.film_cut_worker.isRunning():
             return
@@ -944,6 +946,7 @@ class MiniCutWindow(QMainWindow):
 
         self.film_cut_worker = FilmCutWorker(
             ffmpeg=ffmpeg,
+            ffprobe=ffprobe,
             source=self.model.source,
             duration_ms=self.model.duration_ms,
             srt_path=self.srt_path,
@@ -960,8 +963,10 @@ class MiniCutWindow(QMainWindow):
         self.film_cut_worker.done.connect(self._film_cut_done)
         self.film_cut_worker.failed.connect(self._film_cut_failed)
         self.film_cut_worker.cancelled.connect(self._film_cut_cancelled)
-        self.film_status_label.setText("Analisis dimulai. Film penuh tetap di komputer.")
-        self._log("AI Film Cut dimulai: kandidat lokal → Gemini verifier.")
+        self.film_status_label.setText(
+            "Semantic Cut dimulai: kandidat lokal → video+audio Gemini → frame resolver."
+        )
+        self._log("Semantic Cut: kandidat lokal → Gemini video+audio → frame PTS nyata.")
         self.film_cut_worker.start()
 
     def _film_cut_progress(self, index: int, total: int, stage: str):
@@ -987,11 +992,27 @@ class MiniCutWindow(QMainWindow):
         self.film_table.insertRow(row)
         confidence = float(result.get("confidence") or 0)
         review = bool(result.get("needs_review")) or confidence < 0.55
+        semantic_time = str(
+            result.get("semantic_preferred_time")
+            or result.get("candidate_time")
+            or clock_text(int(result.get("semantic_preferred_ms") or 0))
+        )
+        frame_time = str(
+            result.get("selected_time")
+            or clock_text(int(result.get("selected_time_ms") or 0))
+        )
+        intent = str(result.get("cut_intent") or "semantic_boundary")
+        frame_ok = bool(result.get("frame_verified"))
+        status_text = "REVIEW" if review else ("CACHE" if result.get("cached") else "OK")
+        if not frame_ok:
+            status_text += " · NO FRAME LOCK"
         values = [
             str(result.get("target") or clock_text(target_ms)),
-            str(result.get("selected_time") or clock_text(int(result.get("selected_time_ms") or 0))),
+            semantic_time,
+            frame_time,
+            intent,
             f"{confidence:.0%}",
-            "REVIEW" if review else ("CACHE" if result.get("cached") else "OK"),
+            status_text,
             str(result.get("reason") or ""),
         ]
         for col, value in enumerate(values):
