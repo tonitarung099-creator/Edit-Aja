@@ -456,6 +456,7 @@ class MiniCutWindow(QMainWindow):
         self.player.positionChanged.connect(self._position_changed)
         self.player.durationChanged.connect(self._duration_changed)
         self.player.playbackStateChanged.connect(self._playback_changed)
+        self.player.mediaStatusChanged.connect(self._media_status_changed)
         self.player.errorOccurred.connect(lambda _e, text: self._log("Player: " + text))
 
     # ---------- loading ----------
@@ -482,6 +483,14 @@ class MiniCutWindow(QMainWindow):
             QMessageBox.critical(self, APP_TITLE, str(exc))
 
     def _begin_load(self, source: Path, project_data: dict | None = None, project_path: Path | None = None):
+        if self.proxy_worker and self.proxy_worker.isRunning():
+            self.proxy_worker.cancel()
+        self.preview_proxy = None
+        self._frame_pts_cache = []
+        self._frame_pts_cache_start = 0
+        self._frame_pts_cache_end = 0
+        if hasattr(self, "proxy_status_label"):
+            self.proxy_status_label.setText("Proxy: menunggu video")
         ffprobe = find_tool("ffprobe")
         if not ffprobe:
             QMessageBox.critical(self, APP_TITLE, "ffprobe tidak ditemukan. Pastikan FFmpeg tersedia.")
@@ -515,7 +524,7 @@ class MiniCutWindow(QMainWindow):
             self.model._normalize()
             self.model.project_path = project_path
             self.model.dirty = False
-        self.player.setSource(QUrl.fromLocalFile(str(source)))
+        self._switch_player_media(source, resume=False)
         self.timeline.setRange(0, max(0, self.model.duration_ms))
         self.undo_stack.clear()
         self.film_cut_results = []
@@ -529,6 +538,7 @@ class MiniCutWindow(QMainWindow):
         self.status.setText(f"Siap · {source.name} · {len(keyframes)} keyframe")
         self._log(f"Video dibuka: {source}")
         self._refresh()
+        self._start_preview_proxy(source, metadata)
 
     def _analysis_failed(self, message: str):
         self.pending_load = None
