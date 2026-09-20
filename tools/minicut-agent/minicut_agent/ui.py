@@ -305,9 +305,9 @@ class MiniCutWindow(QMainWindow):
         layout = QVBoxLayout(w)
 
         intro = QLabel(
-            "Mode hemat + frame-accurate: MiniCut mencari kandidat lokal, lalu Gemini melihat "
-            "5 frame kecil per kandidat + SRT. Tidak ada video/audio yang dikirim. Setelah "
-            "itu MiniCut mengunci hasil ke frame PTS nyata dan SmartCut mengekspornya."
+            "Mode visual-first + frame-accurate: MiniCut mengutamakan perpindahan scene besar "
+            "(lokasi/waktu/suasana), lalu Gemini melihat 3 frame kecil per kandidat + SRT. "
+            "SRT menjaga dialog tetap utuh. Hasil dikunci ke frame PTS nyata dan SmartCut."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -1200,9 +1200,9 @@ class MiniCutWindow(QMainWindow):
         self.film_cut_worker.failed.connect(self._film_cut_failed)
         self.film_cut_worker.cancelled.connect(self._film_cut_cancelled)
         self.film_status_label.setText(
-            "Analisis hemat dimulai: kandidat lokal → frame+SRT Gemini → frame resolver."
+            "Analisis visual-first: kandidat lokal → 3 frame+SRT Gemini → frame resolver."
         )
-        self._log("AI Film Cut hemat: kandidat lokal → Gemini frame+SRT → frame PTS nyata.")
+        self._log("AI Film Cut visual-first: scene kandidat → Gemini 3 frame+SRT → frame PTS nyata.")
         self.film_cut_worker.start()
 
     def _film_cut_progress(self, index: int, total: int, stage: str):
