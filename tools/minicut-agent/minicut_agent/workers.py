@@ -9,6 +9,7 @@ from PySide6.QtCore import QThread, Signal
 from .candidates import find_candidates_for_target, target_times
 from .core import export_segments, probe_keyframes, probe_media
 from .gemini import GeminiClient
+from .frame_resolver import resolve_semantic_frame
 from .subtitles import SubtitleTrack
 
 class AnalyzeWorker(QThread):
@@ -38,6 +39,7 @@ class ExportWorker(QThread):
     def __init__(self, ffmpeg: str, source: Path, output_dir: Path, base_name: str, cuts: list[int], duration_ms: int):
         super().__init__()
         self.ffmpeg = ffmpeg
+        self.ffprobe = ffprobe
         self.source = source
         self.output_dir = output_dir
         self.base_name = base_name
@@ -110,11 +112,12 @@ class FilmCutWorker(QThread):
     failed = Signal(str)
     cancelled = Signal()
 
-    CACHE_VERSION = 1
+    CACHE_VERSION = 2
 
     def __init__(
         self,
         ffmpeg: str,
+        ffprobe: str,
         source: Path,
         duration_ms: int,
         srt_path: Path,
@@ -214,7 +217,7 @@ class FilmCutWorker(QThread):
                     self.cancelled.emit()
                     return
 
-                self.progress_changed.emit(index, len(targets), "Gemini menilai kandidat")
+                self.progress_changed.emit(index, len(targets), "Gemini memahami cerita + audio")
                 verdict = client.verify_candidates(
                     self.ffmpeg,
                     self.source,
@@ -222,6 +225,31 @@ class FilmCutWorker(QThread):
                     local,
                     subtitles,
                 )
+                if self._cancel:
+                    self.cancelled.emit()
+                    return
+
+                self.progress_changed.emit(index, len(targets), "Mengunci ke frame nyata")
+                resolved = resolve_semantic_frame(
+                    self.source,
+                    self.ffprobe,
+                    preferred_ms=int(verdict.get("preferred_time_ms") or verdict.get("candidate_time_ms") or target_ms),
+                    zone_start_ms=int(verdict.get("boundary_start_ms") or verdict.get("candidate_time_ms") or target_ms),
+                    zone_end_ms=int(verdict.get("boundary_end_ms") or verdict.get("candidate_time_ms") or target_ms),
+                    subtitles=subtitles,
+                    prefer_before_ms=verdict.get("new_content_starts_ms"),
+                )
+                verdict["semantic_preferred_ms"] = int(verdict.get("preferred_time_ms") or 0)
+                verdict["semantic_preferred_time"] = (
+                    verdict.get("candidate_time")
+                    if not verdict.get("preferred_time_ms")
+                    else __import__("minicut_agent.subtitles", fromlist=["format_ms"]).format_ms(int(verdict["preferred_time_ms"]))
+                )
+                verdict["selected_time_ms"] = int(resolved["time_ms"])
+                verdict["selected_time"] = str(resolved["time"])
+                verdict["frame_verified"] = bool(resolved.get("frame_verified"))
+                verdict["frame_delta_ms"] = int(resolved.get("frame_delta_ms") or 0)
+                verdict["frame_resolution_reason"] = str(resolved.get("reason") or "")
                 verdict["local_candidates"] = [c.to_dict() for c in local]
                 verdict["cached"] = False
                 results.append(verdict)
