@@ -17,9 +17,9 @@ DEFAULT_MODEL = "gemini-3.5-flash-lite"
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 
 # Hemat token: Gemini hanya menerima gambar kecil + SRT, bukan video/audio.
-FRAME_OFFSETS_MS = (-3000, -800, 0, 800, 3000)
-FRAME_WIDTH = 448
-SEMANTIC_ZONE_LIMIT_MS = 6000
+FRAME_OFFSETS_MS = (-4000, -450, 4000)
+FRAME_WIDTH = 512
+SEMANTIC_ZONE_LIMIT_MS = 1200
 
 
 @dataclass
@@ -103,24 +103,18 @@ class GeminiClient:
         if not candidates:
             raise ValueError("Tidak ada kandidat untuk diverifikasi Gemini.")
 
-        prompt = _semantic_prompt(target_ms, candidates, subtitles)
+        prompt = _verification_prompt(target_ms, candidates, subtitles)
         parts: list[dict[str, Any]] = [{"text": prompt}]
 
+        labels = ("sebelum-jauh", "dekat-sebelum", "sesudah-jauh")
         for i, candidate in enumerate(candidates, 1):
-            parts.append({
-                "text": (
-                    f"KANDIDAT {i} · pusat {format_ms(candidate.time_ms)}. "
-                    "Urutan gambar berikut bergerak dari sebelum → sesudah kandidat. "
-                    "Tidak ada audio yang dikirim."
-                )
-            })
-            for offset_ms in FRAME_OFFSETS_MS:
+            parts.append({"text": f"KANDIDAT {i} · {format_ms(candidate.time_ms)}"})
+            for label, offset_ms in zip(labels, FRAME_OFFSETS_MS):
                 frame_ms = max(0, candidate.time_ms + offset_ms)
                 jpg = extract_frame_jpeg(ffmpeg, source, frame_ms, frame_width)
-                sign = "+" if offset_ms > 0 else ""
                 parts.append({
                     "text": (
-                        f"Kandidat {i} · {sign}{offset_ms} ms · "
+                        f"Kandidat {i} · frame {label} · "
                         f"timestamp {format_ms(frame_ms)}"
                     )
                 })
@@ -136,7 +130,7 @@ class GeminiClient:
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 900,
+                "maxOutputTokens": 700,
                 "responseMimeType": "application/json",
             },
         }
@@ -155,39 +149,23 @@ class GeminiClient:
             raise RuntimeError("Gemini memilih kandidat di luar daftar.")
 
         selected = candidates[selected_index - 1]
-        start_off = _bounded_offset(result.get("boundary_start_offset_ms"), -900)
-        end_off = _bounded_offset(result.get("boundary_end_offset_ms"), 900)
-        preferred_off = _bounded_offset(result.get("preferred_offset_ms"), 0)
-        if start_off > end_off:
-            start_off, end_off = end_off, start_off
-        preferred_off = max(start_off, min(end_off, preferred_off))
 
-        new_content_off = result.get("new_content_starts_offset_ms")
-        try:
-            new_content_off = (
-                _bounded_offset(new_content_off, None)
-                if new_content_off is not None else None
-            )
-        except Exception:
-            new_content_off = None
-
+        # Gemini kembali hanya memilih kandidat seperti versi lama.
+        # Exact-frame resolver lokal yang mengubah kandidat itu menjadi PTS frame asli.
         result["selected_candidate_index"] = selected_index
         result["candidate_time_ms"] = selected.time_ms
         result["candidate_time"] = format_ms(selected.time_ms)
-        result["boundary_start_ms"] = max(0, selected.time_ms + start_off)
-        result["boundary_end_ms"] = max(0, selected.time_ms + end_off)
-        result["preferred_time_ms"] = max(0, selected.time_ms + preferred_off)
-        result["new_content_starts_ms"] = (
-            max(0, selected.time_ms + int(new_content_off))
-            if new_content_off is not None else None
-        )
+        result["preferred_time_ms"] = selected.time_ms
+        result["boundary_start_ms"] = max(0, selected.time_ms - 650)
+        result["boundary_end_ms"] = selected.time_ms + 650
+        result["new_content_starts_ms"] = None
         result["target_ms"] = target_ms
         result["target"] = format_ms(target_ms)
-        result["analysis_mode"] = "frames+srt"
+        result["analysis_mode"] = "visual-first-3frames+srt"
         result["frames_per_candidate"] = len(FRAME_OFFSETS_MS)
+        result["cut_intent"] = str(result.get("cut_intent") or "scene_transition")
         result["usage"] = self.usage.__dict__.copy()
         return result
-
 
 def _bounded_offset(value: Any, default: int | None) -> int:
     if value is None:
@@ -255,7 +233,7 @@ def _response_text(data: dict[str, Any]) -> str:
     return text
 
 
-def _semantic_prompt(
+def _verification_prompt(
     target_ms: int,
     candidates: list[LocalCandidate],
     subtitles: SubtitleTrack | None,
@@ -263,49 +241,38 @@ def _semantic_prompt(
     rows = []
     for i, candidate in enumerate(candidates, 1):
         rows.append(
-            f"{i}. pusat={format_ms(candidate.time_ms)} | "
+            f"{i}. {format_ms(candidate.time_ms)} | "
             f"jarak target={candidate.distance_ms/1000:.1f}s | "
-            f"visual_change={candidate.visual} | silence_lokal={candidate.silence} | "
-            f"subtitle_gap={candidate.subtitle_gap} | dialogue_edge={candidate.dialogue_edge} | "
-            f"subtitle_safe={candidate.subtitle_safe}"
+            f"visual_change={candidate.visual} | silence={candidate.silence} | "
+            f"subtitle_gap={candidate.subtitle_gap} | subtitle_safe={candidate.subtitle_safe}"
         )
         if subtitles:
-            excerpt = subtitles.nearby_text(
-                candidate.time_ms,
-                radius_ms=12_000,
-                max_chars=1800,
-            )
+            excerpt = subtitles.nearby_text(candidate.time_ms, radius_ms=10_000, max_chars=1300)
             rows.append("SRT sekitar kandidat:\n" + (excerpt or "(tidak ada subtitle)"))
 
     return f"""
-Tugas: tentukan BATAS NARATIF film paling natural di sekitar target
-{format_ms(target_ms)}. Target sekitar 15 menit hanyalah referensi durasi part.
+Tugas: pilih SATU batas part film paling natural dari kandidat yang ditemukan MiniCut lokal.
 
-INPUT YANG ANDA TERIMA:
-- beberapa frame gambar bertimestamp sebelum/sesudah setiap kandidat;
-- SRT di sekitar kandidat;
-- petunjuk lokal visual, silence, subtitle gap, dan dialogue edge.
-TIDAK ADA AUDIO dan TIDAK ADA VIDEO yang dikirim. Jangan mengarang informasi audio
-yang tidak dapat dibuktikan dari SRT/data lokal.
+Patokan global: {format_ms(target_ms)}.
+Target sekitar 15 menit hanyalah referensi, BUKAN waktu potong wajib.
 
-ATURAN UTAMA:
-- Pergantian gambar/shot/kamera BUKAN otomatis batas part.
-- Prioritaskan keutuhan scene, percakapan, aksi, reaksi, dan sebab-akibat.
-- Jangan memisahkan pertanyaan dan jawaban yang jelas masih satu percakapan.
-- Jangan potong di tengah subtitle/dialog yang tercatat.
-- Jika SRT menunjukkan dialog/isi baru mulai sebelum gambar berubah, batas BOLEH
-  berada sebelum dialog baru itu.
-- Jika gambar berubah tetapi subtitle/kejadian lama jelas masih berlanjut, jangan
-  otomatis memotong pada perubahan gambar.
-- Silence lokal hanyalah petunjuk, bukan kewajiban.
-- Pilih kandidat yang membuat akhir Part N terasa selesai dan Part N+1 terasa wajar.
+PRIORITAS UTAMA:
+- Utamakan PERPINDAHAN SCENE/KONTEKS VISUAL YANG BESAR dan terasa seperti babak baru:
+  pindah lokasi, siang ke malam, malam ke siang, interior ke eksterior, perubahan waktu,
+  establishing shot baru, atau adegan lama jelas selesai lalu dunia/ruang baru dimulai.
+- Jangan menganggap cut kamera biasa, close-up berganti, angle berubah, atau shot-reverse-shot
+  dalam percakapan yang sama sebagai perpindahan scene.
+- Visual adalah sumber utama untuk memilih batas.
+- SRT adalah PENJAGA DIALOG: gunakan untuk memastikan kandidat visual tidak memotong kalimat,
+  pertanyaan-jawaban, atau percakapan yang masih satu rangkaian.
+- Silence hanya petunjuk tambahan, bukan alasan utama.
+- Lebih baik sedikit lewat/kurang dari 15 menit jika ada perpindahan lokasi/waktu/scene yang
+  jauh lebih natural.
+- Jangan mengarang timestamp baru. Hanya pilih satu kandidat yang tersedia.
+- Jika tidak ada kandidat yang jelas bagus, pilih yang paling aman dan set
+  needs_review=true dengan confidence lebih rendah.
 
-Anda TIDAK perlu memilih keyframe atau frame encoding. Berikan ZONA BATAS sempit.
-MiniCut akan membaca PTS frame asli dan mengunci keputusan Anda ke frame nyata setelahnya.
-
-Semua offset di JSON dalam MILIDETIK relatif terhadap pusat kandidat:
-0 = pusat kandidat, negatif = sebelum, positif = sesudah.
-Gunakan zona sesempit mungkin yang masih masuk akal. Jangan keluar ±6000 ms.
+Anda hanya melihat 3 frame ringkas per kandidat + SRT, tanpa video/audio.
 
 Kandidat:
 {chr(10).join(rows)}
@@ -313,19 +280,11 @@ Kandidat:
 Kembalikan HANYA JSON valid:
 {{
   "selected_candidate_index": 1,
-  "boundary_start_offset_ms": -500,
-  "boundary_end_offset_ms": 400,
-  "preferred_offset_ms": -100,
-  "new_content_starts_offset_ms": 300,
-  "cut_intent": "before_new_dialogue|after_old_dialogue|scene_transition|action_complete|safe_gap|other",
   "confidence": 0.0,
-  "dialogue_safe": true,
-  "action_safe": true,
+  "scene_change": true,
+  "dialog_safe": true,
   "needs_review": false,
+  "cut_intent": "scene_transition",
   "reason": "alasan singkat dalam Bahasa Indonesia"
 }}
-
-Jika awal konten/dialog baru tidak dapat ditentukan dari SRT/frame, gunakan
-new_content_starts_offset_ms=null.
-Jika konteks gambar+SRT tidak cukup, set needs_review=true dan confidence lebih rendah.
 """.strip()
