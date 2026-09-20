@@ -132,11 +132,11 @@ def rank_candidates(
 ) -> list[LocalCandidate]:
     pool = list(visual_points)
     pool.extend(silence_points)
-    dialogue_points: list[int] = []
     if subtitles:
+        # SRT dipakai sebagai penjaga dialog, bukan sumber kandidat utama.
+        # Ini sengaja mengikuti perilaku versi lama yang lebih kuat memilih
+        # perpindahan scene/lokasi/waktu secara visual.
         pool.extend(subtitles.gap_boundaries(target_ms - window_ms, target_ms + window_ms))
-        dialogue_points = subtitles.dialogue_boundaries(target_ms - window_ms, target_ms + window_ms)
-        pool.extend(dialogue_points)
     if not pool:
         pool = [target_ms]
 
@@ -151,24 +151,22 @@ def rank_candidates(
         silence = silence_dist is not None and silence_dist <= 900
         subtitle_safe = subtitles.is_safe_cut(point, 300) if subtitles else True
         subtitle_gap = False
-        dialogue_edge = False
         if subtitles:
             gap_dist = _nearest_distance(
                 point,
                 subtitles.gap_boundaries(target_ms - window_ms, target_ms + window_ms),
             )
             subtitle_gap = gap_dist is not None and gap_dist <= 700
-            dialogue_dist = _nearest_distance(point, dialogue_points)
-            dialogue_edge = dialogue_dist is not None and dialogue_dist <= 450
 
-        # Visual change is only one clue. Dialogue/audio boundaries are allowed
-        # to outrank picture cuts so J-cuts and L-cuts remain natural.
-        score = closeness * 0.28
-        score += 0.25 if visual else 0.0
-        score += 0.14 if silence else 0.0
-        score += 0.20 if subtitle_gap else 0.0
-        score += 0.16 if dialogue_edge else 0.0
-        score += 0.10 if subtitle_safe else -0.60
+        # Restore the pre-SmartCut selection behavior:
+        # major visual scene changes dominate; SRT mainly vetoes unsafe dialogue cuts.
+        score = closeness * 0.32
+        score += 0.43 if visual else 0.0
+        score += 0.12 if silence else 0.0
+        score += 0.18 if subtitle_gap else 0.0
+        score += 0.08 if subtitle_safe else -0.55
+        if not visual:
+            score -= 0.08
         score = round(max(-1.0, min(1.0, score)), 4)
 
         result.append(LocalCandidate(
@@ -178,7 +176,7 @@ def rank_candidates(
             visual=visual,
             silence=silence,
             subtitle_gap=subtitle_gap,
-            dialogue_edge=dialogue_edge,
+            dialogue_edge=False,
             subtitle_safe=subtitle_safe,
             score=score,
         ))
