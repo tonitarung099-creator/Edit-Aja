@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Callable
@@ -391,41 +393,38 @@ def export_segments_smartcut(
         if log:
             log(f"SmartCut Part-{idx:02d}: {keep}")
 
-        proc = subprocess.Popen(
-            [
-                smartcut_exe,
-                str(source),
-                str(out),
-                "--keep",
-                keep,
-                "--log-level",
-                "warning",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creation_flags(),
-        )
-        lines: list[str] = []
-        while True:
-            if cancelled and cancelled():
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                raise InterruptedError("Ekspor dibatalkan.")
-            line = proc.stdout.readline() if proc.stdout else ""
-            if line:
-                clean = line.strip()
-                if clean:
-                    lines.append(clean)
-                    if log:
-                        log(clean)
-            if proc.poll() is not None:
-                break
+        if out.exists():
+            out.unlink()
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as smartcut_log:
+            proc = subprocess.Popen(
+                [
+                    smartcut_exe,
+                    str(source),
+                    str(out),
+                    "--keep",
+                    keep,
+                    "--log-level",
+                    "warning",
+                ],
+                stdout=smartcut_log,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=creation_flags(),
+            )
+            while proc.poll() is None:
+                if cancelled and cancelled():
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    raise InterruptedError("Ekspor dibatalkan.")
+                time.sleep(0.12)
+            smartcut_log.seek(0)
+            lines = [x.strip() for x in smartcut_log.readlines() if x.strip()]
+            if log:
+                for clean in lines[-20:]:
+                    log(clean)
 
         if proc.returncode != 0:
             tail = "\n".join(lines[-20:])
