@@ -83,6 +83,25 @@ class SubtitleTrack:
             )
         return "\n".join(rows)[:max_chars]
 
+
+    def dialogue_boundaries(self, start_ms: int, end_ms: int) -> list[int]:
+        """Return local dialogue-edge hints for semantic cut discovery.
+
+        A cut can be natural just before new dialogue starts or just after
+        old dialogue ends, even when the picture changes later.
+        """
+        result: list[int] = []
+        for cue in self.cues:
+            if cue.end_ms < start_ms or cue.start_ms > end_ms:
+                continue
+            before_start = cue.start_ms - 120
+            after_end = cue.end_ms + 120
+            if start_ms <= before_start <= end_ms:
+                result.append(before_start)
+            if start_ms <= after_end <= end_ms:
+                result.append(after_end)
+        return sorted(set(result))
+
     def gap_boundaries(self, start_ms: int, end_ms: int, min_gap_ms: int = 450) -> list[int]:
         result: list[int] = []
         relevant = [
