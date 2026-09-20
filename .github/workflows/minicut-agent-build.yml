@@ -34,32 +34,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Compile Python
+      - name: Compile and import checks
         shell: pwsh
         run: |
           python -m compileall -q minicut_agent main.py mcp_server.py
+          python -c "from minicut_agent.ui import MiniCutWindow; print('ui-import-ok')"
+          python -c "import mcp_server; print('mcp-import-ok')"
 
       - name: Build MiniCut Studio Agent
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --windowed --name "MiniCut Studio Agent" --collect-all PySide6 main.py
+          pyinstaller --noconfirm --clean --windowed --name "MiniCut Studio Agent" --hidden-import PySide6.QtMultimedia --hidden-import PySide6.QtMultimediaWidgets main.py
 
       - name: Build MCP companion
         shell: pwsh
         run: |
-          pyinstaller --noconfirm --clean --console --name "MiniCut MCP" --collect-all mcp mcp_server.py
+          pyinstaller --noconfirm --clean --console --name "MiniCut MCP" mcp_server.py
           Copy-Item "dist/MiniCut MCP/MiniCut MCP.exe" "dist/MiniCut Studio Agent/MiniCut MCP.exe"
           Copy-Item README.md "dist/MiniCut Studio Agent/README_AGENT.md"
-
-      - name: Bundle FFmpeg
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          choco install ffmpeg -y --no-progress
-          $ffmpeg = (Get-Command ffmpeg).Source
-          $ffprobe = (Get-Command ffprobe).Source
-          Copy-Item $ffmpeg "dist/MiniCut Studio Agent/ffmpeg.exe"
-          Copy-Item $ffprobe "dist/MiniCut Studio Agent/ffprobe.exe"
 
       - name: Smoke test executable
         shell: pwsh
@@ -77,11 +69,11 @@ jobs:
       - name: Package ZIP
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist/MiniCut Studio Agent/*" -DestinationPath "MiniCut-Studio-Agent-Windows.zip" -Force
+          Compress-Archive -Path "dist/MiniCut Studio Agent/*" -DestinationPath "MiniCut-Studio-Agent-Windows-Lite.zip" -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MiniCut-Studio-Agent-Windows
-          path: tools/minicut-agent/MiniCut-Studio-Agent-Windows.zip
+          name: MiniCut-Studio-Agent-Windows-Lite
+          path: tools/minicut-agent/MiniCut-Studio-Agent-Windows-Lite.zip
           if-no-files-found: error
