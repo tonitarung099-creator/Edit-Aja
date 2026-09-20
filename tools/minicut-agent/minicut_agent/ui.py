@@ -23,7 +23,8 @@ from .core import (
     CutPoint, ProjectModel, SUPPORTED_VIDEO, clock_text, find_tool,
     load_project_file, parse_time_ms
 )
-from .gemini import DEFAULT_MODEL\nfrom .workers import AgentWorker, AnalyzeWorker, ExportWorker, FilmCutWorker, GeminiTestWorker
+from .gemini import DEFAULT_MODEL
+from .workers import AgentWorker, AnalyzeWorker, ExportWorker, FilmCutWorker, GeminiTestWorker
 
 
 class TimelineSlider(QSlider):
