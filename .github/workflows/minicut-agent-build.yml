@@ -1,0 +1,87 @@
+name: Build MiniCut Studio Agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - minicut-agent-build
+    paths:
+      - "tools/minicut-agent/**"
+      - ".github/workflows/minicut-agent-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tools/minicut-agent
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Compile Python
+        shell: pwsh
+        run: |
+          python -m compileall -q minicut_agent main.py mcp_server.py
+
+      - name: Build MiniCut Studio Agent
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name "MiniCut Studio Agent" --collect-all PySide6 main.py
+
+      - name: Build MCP companion
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --console --name "MiniCut MCP" --collect-all mcp mcp_server.py
+          Copy-Item "dist/MiniCut MCP/MiniCut MCP.exe" "dist/MiniCut Studio Agent/MiniCut MCP.exe"
+          Copy-Item README.md "dist/MiniCut Studio Agent/README_AGENT.md"
+
+      - name: Bundle FFmpeg
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          choco install ffmpeg -y --no-progress
+          $ffmpeg = (Get-Command ffmpeg).Source
+          $ffprobe = (Get-Command ffprobe).Source
+          Copy-Item $ffmpeg "dist/MiniCut Studio Agent/ffmpeg.exe"
+          Copy-Item $ffprobe "dist/MiniCut Studio Agent/ffprobe.exe"
+
+      - name: Smoke test executable
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/MiniCut Studio Agent/MiniCut Studio Agent.exe" -ArgumentList "--self-test" -PassThru
+          if (-not $p.WaitForExit(30000)) {
+            $p.Kill()
+            throw "MiniCut self-test timeout"
+          }
+          $p.Refresh()
+          if ($p.ExitCode -ne 0) {
+            throw "MiniCut self-test failed with exit code $($p.ExitCode)"
+          }
+
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/MiniCut Studio Agent/*" -DestinationPath "MiniCut-Studio-Agent-Windows.zip" -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniCut-Studio-Agent-Windows
+          path: tools/minicut-agent/MiniCut-Studio-Agent-Windows.zip
+          if-no-files-found: error
