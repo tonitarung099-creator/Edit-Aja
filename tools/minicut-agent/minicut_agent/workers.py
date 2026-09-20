@@ -10,7 +10,7 @@ from .candidates import find_candidates_for_target, target_times
 from .core import export_segments, probe_keyframes, probe_media
 from .gemini import GeminiClient
 from .frame_resolver import resolve_semantic_frame
-from .subtitles import SubtitleTrack
+from .subtitles import SubtitleTrack, format_ms
 
 class AnalyzeWorker(QThread):
     ready = Signal(dict, list)
@@ -39,7 +39,6 @@ class ExportWorker(QThread):
     def __init__(self, ffmpeg: str, source: Path, output_dir: Path, base_name: str, cuts: list[int], duration_ms: int):
         super().__init__()
         self.ffmpeg = ffmpeg
-        self.ffprobe = ffprobe
         self.source = source
         self.output_dir = output_dir
         self.base_name = base_name
@@ -130,6 +129,7 @@ class FilmCutWorker(QThread):
     ):
         super().__init__()
         self.ffmpeg = ffmpeg
+        self.ffprobe = ffprobe
         self.source = source
         self.duration_ms = int(duration_ms)
         self.srt_path = srt_path
@@ -243,7 +243,7 @@ class FilmCutWorker(QThread):
                 verdict["semantic_preferred_time"] = (
                     verdict.get("candidate_time")
                     if not verdict.get("preferred_time_ms")
-                    else __import__("minicut_agent.subtitles", fromlist=["format_ms"]).format_ms(int(verdict["preferred_time_ms"]))
+                    else format_ms(int(verdict["preferred_time_ms"]))
                 )
                 verdict["selected_time_ms"] = int(resolved["time_ms"])
                 verdict["selected_time"] = str(resolved["time"])
