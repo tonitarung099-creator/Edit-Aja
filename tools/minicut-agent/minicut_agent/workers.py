@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
+from .candidates import find_candidates_for_target, target_times
 from .core import export_segments, probe_keyframes, probe_media
+from .gemini import GeminiClient
+from .subtitles import SubtitleTrack
 
 class AnalyzeWorker(QThread):
     ready = Signal(dict, list)
@@ -80,5 +84,151 @@ class AgentWorker(QThread):
     def run(self):
         try:
             self.ready.emit(self.planner.remote_plan(self.endpoint, self.model, self.api_key, self.text, self.state))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+class GeminiTestWorker(QThread):
+    ready = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, api_key: str, model: str):
+        super().__init__()
+        self.api_key = api_key
+        self.model = model
+
+    def run(self):
+        try:
+            self.ready.emit(GeminiClient(self.api_key, self.model).test_connection())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+class FilmCutWorker(QThread):
+    progress_changed = Signal(int, int, str)
+    target_result = Signal(dict)
+    usage_changed = Signal(dict)
+    done = Signal(list)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    CACHE_VERSION = 1
+
+    def __init__(
+        self,
+        ffmpeg: str,
+        source: Path,
+        duration_ms: int,
+        srt_path: Path,
+        api_key: str,
+        model: str,
+        interval_ms: int = 15 * 60_000,
+        window_ms: int = 2 * 60_000,
+        top_n: int = 3,
+        use_cache: bool = True,
+    ):
+        super().__init__()
+        self.ffmpeg = ffmpeg
+        self.source = source
+        self.duration_ms = int(duration_ms)
+        self.srt_path = srt_path
+        self.api_key = api_key
+        self.model = model
+        self.interval_ms = int(interval_ms)
+        self.window_ms = int(window_ms)
+        self.top_n = int(top_n)
+        self.use_cache = bool(use_cache)
+        self._cancel = False
+
+    @property
+    def cache_path(self) -> Path:
+        return self.source.with_suffix(self.source.suffix + ".minicut-ai-cache.json")
+
+    def cancel(self):
+        self._cancel = True
+
+    def _load_cache(self) -> dict[int, dict]:
+        if not self.use_cache or not self.cache_path.is_file():
+            return {}
+        try:
+            data = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            valid = (
+                data.get("version") == self.CACHE_VERSION
+                and data.get("source") == str(self.source.resolve())
+                and data.get("srt") == str(self.srt_path.resolve())
+                and int(data.get("interval_ms") or 0) == self.interval_ms
+                and int(data.get("window_ms") or 0) == self.window_ms
+                and data.get("model") == self.model
+            )
+            if not valid:
+                return {}
+            return {int(x["target_ms"]): x for x in data.get("results", []) if "target_ms" in x}
+        except Exception:
+            return {}
+
+    def _save_cache(self, results: list[dict]):
+        if not self.use_cache:
+            return
+        payload = {
+            "version": self.CACHE_VERSION,
+            "source": str(self.source.resolve()),
+            "srt": str(self.srt_path.resolve()),
+            "interval_ms": self.interval_ms,
+            "window_ms": self.window_ms,
+            "model": self.model,
+            "results": results,
+        }
+        try:
+            self.cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def run(self):
+        try:
+            subtitles = SubtitleTrack.load(self.srt_path)
+            client = GeminiClient(self.api_key, self.model)
+            targets = target_times(self.duration_ms, self.interval_ms)
+            cached = self._load_cache()
+            results: list[dict] = []
+
+            for index, target_ms in enumerate(targets, 1):
+                if self._cancel:
+                    self.cancelled.emit()
+                    return
+
+                self.progress_changed.emit(index, len(targets), "Mencari kandidat lokal")
+                if target_ms in cached:
+                    result = dict(cached[target_ms])
+                    result["cached"] = True
+                    results.append(result)
+                    self.target_result.emit(result)
+                    continue
+
+                local = find_candidates_for_target(
+                    self.ffmpeg,
+                    self.source,
+                    target_ms,
+                    self.window_ms,
+                    subtitles,
+                    top_n=self.top_n,
+                )
+                if self._cancel:
+                    self.cancelled.emit()
+                    return
+
+                self.progress_changed.emit(index, len(targets), "Gemini menilai kandidat")
+                verdict = client.verify_candidates(
+                    self.ffmpeg,
+                    self.source,
+                    target_ms,
+                    local,
+                    subtitles,
+                )
+                verdict["local_candidates"] = [c.to_dict() for c in local]
+                verdict["cached"] = False
+                results.append(verdict)
+                self._save_cache(results)
+                self.target_result.emit(verdict)
+                self.usage_changed.emit(client.usage.__dict__.copy())
+
+            self.done.emit(results)
         except Exception as exc:
             self.failed.emit(str(exc))
