@@ -112,8 +112,12 @@ class MiniCutWindow(QMainWindow):
         self.open_project_btn = QPushButton("Buka Proyek")
         self.save_btn = QPushButton("Simpan Proyek")
         self.export_btn = QPushButton("Ekspor Semua Part")
+        self.export_mode = QComboBox()
+        self.export_mode.addItem("SmartCut · Frame Accurate", "smartcut")
+        self.export_mode.addItem("Fast Copy · Keyframe", "fast")
         for b in (self.open_video_btn, self.open_project_btn, self.save_btn, self.export_btn):
             toolbar.addWidget(b)
+        toolbar.addWidget(self.export_mode)
         toolbar.addStretch(1)
         outer.addLayout(toolbar)
 
@@ -1217,13 +1221,28 @@ class MiniCutWindow(QMainWindow):
         ffmpeg = find_tool("ffmpeg")
         if not ffmpeg:
             raise RuntimeError("ffmpeg tidak ditemukan. Pastikan FFmpeg tersedia.")
+        mode = str(self.export_mode.currentData() or "smartcut")
+        smartcut_exe = None
+        if mode == "smartcut":
+            smartcut_exe = find_tool("MiniCut SmartCut") or find_tool("smartcut")
+            if not smartcut_exe:
+                raise RuntimeError(
+                    "MiniCut SmartCut tidak ditemukan. Gunakan paket aplikasi lengkap "
+                    "atau pilih Fast Copy."
+                )
         parent = QFileDialog.getExistingDirectory(self, "Pilih folder hasil ekspor")
         if not parent:
             return {"ok": False, "cancelled": True}
         out_dir = Path(parent) / (self.model.source.stem + "_Parts")
         self.export_worker = ExportWorker(
-            ffmpeg, self.model.source, out_dir, self.model.source.stem,
-            [c.actual_ms for c in self.model.cuts], self.model.duration_ms
+            ffmpeg,
+            self.model.source,
+            out_dir,
+            self.model.source.stem,
+            [c.actual_ms for c in self.model.cuts],
+            self.model.duration_ms,
+            mode=mode,
+            smartcut_exe=smartcut_exe,
         )
         self.export_worker.progress_changed.connect(self._export_progress)
         self.export_worker.log_line.connect(self._log)
@@ -1231,9 +1250,20 @@ class MiniCutWindow(QMainWindow):
         self.export_worker.failed.connect(self._export_failed)
         self.export_worker.cancelled.connect(self._export_cancelled)
         self.progress.setValue(0)
-        self.status.setText("Mengekspor part…")
+        self.status.setText(
+            "SmartCut frame-accurate…" if mode == "smartcut" else "Fast Copy…"
+        )
+        self._log(
+            "Mode ekspor: SmartCut frame-accurate"
+            if mode == "smartcut" else "Mode ekspor: Fast Copy keyframe"
+        )
         self.export_worker.start()
-        return {"ok": True, "started": True, "output_dir": str(out_dir)}
+        return {
+            "ok": True,
+            "started": True,
+            "mode": mode,
+            "output_dir": str(out_dir),
+        }
 
     def tool_undo(self):
         if not self.undo_stack:
