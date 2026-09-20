@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import json
 import queue
 from dataclasses import asdict
@@ -21,11 +22,12 @@ from .agent import AgentPlanner, MUTATING_TOOLS, ToolRegistry
 from .bridge import BridgeCall, LocalBridge
 from .core import (
     CutPoint, ProjectModel, SUPPORTED_VIDEO, clock_text, find_tool,
-    load_project_file, parse_time_ms
+    load_project_file, parse_time_ms, preview_proxy_path
 )
 from .gemini import DEFAULT_MODEL
+from .frame_resolver import probe_frame_timestamps
 from .gemini_keys import GeminiKeyStore, MAX_GEMINI_KEYS
-from .workers import AgentWorker, AnalyzeWorker, ExportWorker, FilmCutWorker, GeminiTestWorker
+from .workers import AgentWorker, AnalyzeWorker, ExportWorker, FilmCutWorker, GeminiTestWorker, ProxyWorker
 
 
 class TimelineSlider(QSlider):
@@ -67,6 +69,14 @@ class MiniCutWindow(QMainWindow):
         self.agent_worker: AgentWorker | None = None
         self.gemini_test_worker: GeminiTestWorker | None = None
         self.film_cut_worker: FilmCutWorker | None = None
+        self.proxy_worker: ProxyWorker | None = None
+        self.preview_proxy: Path | None = None
+        self._player_media_path: Path | None = None
+        self._pending_player_position: int | None = None
+        self._pending_player_resume = False
+        self._frame_pts_cache: list[int] = []
+        self._frame_pts_cache_start = 0
+        self._frame_pts_cache_end = 0
         self.film_cut_results: list[dict] = []
         self.srt_path: Path | None = None
         self.gemini_keys = GeminiKeyStore()
